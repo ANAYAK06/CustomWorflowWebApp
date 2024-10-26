@@ -1,5 +1,7 @@
 const express = require('express')
 
+const { verifyToken } = require('../middlewares/requireAuth')
+
 const {createNewCostCentre, 
     getAllCostCentreData, 
     getCCDataforVerification, 
@@ -8,12 +10,13 @@ const {createNewCostCentre,
     rejectCostCentre, 
     getEligibleCCForBudgetAssign} = require('../controllers/cccode')
 
+
 const router = express.Router()
 
 
 // new Cost Centre
 
-router.post('/createcostcentre', createNewCostCentre)
+router.post('/createnewcostcentre',verifyToken, createNewCostCentre)
 
 
 //Get All cost centre Data
@@ -22,11 +25,11 @@ router.get('/allcostcentredata', getAllCostCentreData)
 
 // getData for Verification
 
-router.get('/costcentreverification', getCCDataforVerification)
+router.get('/getccforverification',verifyToken, getCCDataforVerification)
 
 //update cost Centre
 
-router.patch('/verifycostcentre/:id', updateCostCentre)
+router.put('/updatecostcentre/:id',verifyToken, updateCostCentre)
 
 // check ccNo exists
 
@@ -34,11 +37,11 @@ router.get('/checkccno/:ccNo', checkCCNoExists)
 
 // reject Cost Centre
 
-router.patch('/rejectcostcentre/:id', rejectCostCentre)
+router.put('/rejectcostcentre/:id',verifyToken, rejectCostCentre)
 
 // cost Centre for CC Budget Assign 
 
-router.get('/eligiblecostcentrefor-buget', getEligibleCCForBudgetAssign)
+router.get('/geteligibleccforbudgetassign', getEligibleCCForBudgetAssign)
 
 
 module.exports = router

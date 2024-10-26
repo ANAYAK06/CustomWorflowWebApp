@@ -10,7 +10,7 @@ const {addSignatureAndRemarks, getSignatureandRemakrs} = require('./signatureAnd
 
 const assignCCBudget = async (req, res)=>{
     try {
-        const {ccid, subId, ccNo, ccBudget, fiscalYear, applyFiscalYear, transferPreviousYearBalance, totalBudget, remarks} = req.body
+        const {ccid, subId, ccNo,ccName, ccBudget, fiscalYear, applyFiscalYear, transferPreviousYearBalance, totalBudget, remarks} = req.body
 
         console.log('Request body:', req.body); 
 
@@ -42,6 +42,7 @@ const assignCCBudget = async (req, res)=>{
             ccid,
             subId,
             ccNo,
+            ccName,
             ccBudget: isFiscalYearApplicable && transferPreviousYearBalance ? totalBudget : ccBudget,
             applyFiscalYear:isFiscalYearApplicable,
             fiscalYear:isFiscalYearApplicable ? fiscalYear : undefined,

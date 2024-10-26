@@ -3,17 +3,14 @@ const Permission = require('../models/permissionModel')
 const notificationEmitter = require('../notificationEmitter')
 const NotificationHub = require('../models/notificationHubModel')
 const CCBudget = require('../models/ccBudgetModel')
-
+const { addSignatureAndRemarks, getSignatureandRemakrs } = require('./signatureAndRemarks');
 const mongoose = require('mongoose')
 
 
 
 //Create new cost Centre
-
-const createNewCostCentre = async (req, res)=>{
-    
+const createNewCostCentre = async (req, res) => {
     try {
-
         const {
             ccType,
             subCCType,
@@ -27,30 +24,29 @@ const createNewCostCentre = async (req, res)=>{
             finalOfferRef,
             finalAcceptanceRef,
             dayLimit,
-            voucherLimit
-
+            voucherLimit,
+            remarks
         } = req.body
 
         const prefixedCcNo = `CC-${ccNo}`
 
-        const existingCostCentre = await CostCentre.findOne({ccNo:prefixedCcNo})
-        
-        if(existingCostCentre){
-            
-            
-            return res.status(400).json({message:'CC Number Already taken'})
-        }
-        const existingCCName = await CostCentre.findOne({ccName})
-
-        if(existingCCName){
-            
-            return res.status(400).json({message:"Name already existing"})
+        // Check if CC number already exists
+        const existingCostCentre = await CostCentre.findOne({ ccNo: prefixedCcNo })
+        if (existingCostCentre) {
+            return res.status(400).json({ message: 'CC Number Already taken' })
         }
 
+        // Check if CC name already exists
+        const existingCCName = await CostCentre.findOne({ ccName: { $regex: new RegExp(`^${ccName}$`, 'i') } })
+        if (existingCCName) {
+            return res.status(400).json({ message: "Name already existing" })
+        }
+
+        // Create new cost centre
         const newCostCentre = new CostCentre({
             ccType,
             subCCType,
-            ccNo:prefixedCcNo,
+            ccNo: prefixedCcNo,
             ccName,
             location,
             address,
@@ -61,61 +57,53 @@ const createNewCostCentre = async (req, res)=>{
             finalAcceptanceRef,
             dayLimit,
             voucherLimit,
-            levelId: 1, 
-            status: 'Verification'
+            status: 'Verification',
+            levelId: 1
         });
         await newCostCentre.save()
 
-        
+        // Add signature and remarks
+        await addSignatureAndRemarks(newCostCentre._id, req.user.roleId, 1, remarks, req.user._id, req.user.userName)
 
-
-        // Fetch workflowId and roleId  for notification
-
-        const permission = await Permission.findOne({workflowId:128})
-        if(!permission){
-           
-            return res.status(404).json({message:'Permission not found'})
-        }
-        const {workflowId, workflowDetails} = permission
-        const roleDetail = workflowDetails.find(detail=> detail.levelId === 1);
-        if(!roleDetail){
-           
-            return res.status(404).json({message:'Role details not found'})
+        // Fetch workflow details
+        const permission = await Permission.findOne({ workflowId: 128 })
+        if (!permission) {
+            return res.status(404).json({ message: 'Permission not found' })
         }
 
-        //create notification
+        const { workflowId, workflowDetails } = permission
+        const workflowDetail = workflowDetails.find(detail => detail.levelId === 1);
+        if (!workflowDetail) {
+            return res.status(404).json({ message: 'Workflow details not found' })
+        }
+
+        // Create notification
         const newNotification = new NotificationHub({
             workflowId,
-            roleId:roleDetail.roleId,
-            pathId:1,
-            levelId:1,
-            relatedEntityId:newCostCentre._id,
-            message:`New Cost Centre Created: ${ccName}`,
-            status:'Pending'
-
+            roleId: workflowDetail.roleId,
+            pathId: workflowDetail.pathId,
+            levelId: 1,
+            relatedEntityId: newCostCentre._id,
+            message: `New Cost Centre Created: ${ccName}`,
+            status: 'Pending'
         })
-        console.log('Notification Hub',newNotification)
-
         await newNotification.save()
 
-        // emit notification
-        notificationEmitter.emit('notification',{
-            userRoleId:roleDetail.roleId,
-            count:1
+        // Emit notification
+        notificationEmitter.emit('notification', {
+            userRoleId: workflowDetail.roleId,
+            count: 1
         })
 
+        res.status(201).json({
+            message: 'Cost Centre Created successfully and sent for verification',
+            costCentre: newCostCentre,
+            notification: newNotification
+        })
 
-        
-
-    
-        
-         res.status(201).json({newCostCentre, newNotification})
-        
     } catch (error) {
-        
-        console.error('Error for creating cost centre :', error)
-        res.status(500).json({ message: 'Server error', error });
-        
+        console.error('Error creating cost centre:', error)
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 }
 
@@ -127,101 +115,120 @@ const getAllCostCentreData = async(req, res)=>{
 }
 
 // get new CC Data for verification next level 
-
-const getCCDataforVerification = async(req, res)=>{
-    const userRoleId = parseInt(req.query.userRoleId)
-    
+const getCCDataforVerification = async (req, res) => {
+    const userRoleId = parseInt(req.query.userRoleId);
     try {
-        const notifications = await NotificationHub.find({roleId:userRoleId, status:'Pending'})
-       
-
-        if(!notifications.length){
-            return res.status(200).json({message:'No Pending Notification available', costCentres:[]})
+        const permission = await Permission.findOne({ workflowId: 128 });
+        if (!permission) {
+            return res.status(404).json({ message: 'Workflow not found' });
         }
-        
-        const costCentreIds = notifications.map(notification=>notification.relatedEntityId)
-        
+
+        const relevantWorkflowDetails = permission.workflowDetails.filter(
+            detail => detail.roleId === userRoleId
+        );
+
+        if (relevantWorkflowDetails.length === 0) {
+            return res.status(404).json({ message: 'No matching workflow details found' });
+        }
+
+        const notifications = await NotificationHub.find({
+            workflowId: 128,
+            roleId: userRoleId,
+            pathId: { $in: relevantWorkflowDetails.map(detail => detail.pathId) },
+            status: 'Pending'
+        });
+
+        if (!notifications.length) {
+            return res.status(200).json({ message: 'No Pending Notification available', costCentres: [] });
+        }
+
+        const costCentreIds = notifications.map(notification => notification.relatedEntityId);
 
         const costCentres = await CostCentre.find({
-            _id:{ $in:costCentreIds },
-            status:'Verification'
-        })
-        if(!costCentres.length){
-            return res.status(200).json({message:'No cost centre data for verification'})
+            _id: { $in: costCentreIds },
+            status: 'Verification',
+            levelId: { $in: relevantWorkflowDetails.map(detail => detail.levelId) }
+        });
+
+        if (!costCentres.length) {
+            return res.status(200).json({ message: 'No cost centre data for verification', costCentres: [] });
         }
-        res.status(200).json(costCentres)
+
+        const costCentresWithSignatures = await Promise.all(costCentres.map(async (cc) => {
+            const signatureAndRemarks = await getSignatureandRemakrs(cc._id);
+            return {
+                ...cc.toObject(),
+                signatureAndRemarks
+            };
+        }));
+
+        res.status(200).json({ costCentres: costCentresWithSignatures });
     } catch (error) {
-        console.error('Error fetching cost centers by role:', error);
+        console.error('Error fetching cost centers for verification:', error);
         res.status(500).json({ message: 'Server error', error });
-        
     }
-}
+};
 
-const updateCostCentre = async (req, res)=>{
+
+//update cost centre
+const updateCostCentre = async (req, res) => {
     try {
-        const {id} = req.params;
-        const costCentre = await CostCentre.findById(id)
+        const { id } = req.params;
+        const { remarks } = req.body;
 
-        if(!costCentre){
-            return res.status(404).json({message:"No cost centre for verification"})
+        const costCentre = await CostCentre.findById(id);
+        if (!costCentre) {
+            return res.status(404).json({ message: "No cost centre for verification" });
         }
-        const {workflowId, levelId} = costCentre;
-        const permission = await Permission.findOne({workflowId:128})
-       
 
-        if(!permission){
-            return res.status(404).json({message:'Permission not found'})
+        const { levelId } = costCentre;
+        const permission = await Permission.findOne({ workflowId: 128 });
+        if (!permission) {
+            return res.status(404).json({ message: 'Permission not found' });
         }
-        const {workflowDetails} = permission
-        const currentRoleDetail = workflowDetails.find(detail=>detail.levelId === levelId)
-        const nextRoleDetail = workflowDetails.find(detail=>detail.levelId === levelId + 1)
 
-        if(nextRoleDetail){
-            costCentre.levelId = nextRoleDetail.levelId
-            await costCentre.save()
+        const { workflowDetails } = permission;
+        const currentRoleDetail = workflowDetails.find(detail => detail.levelId === levelId);
+        const nextRoleDetail = workflowDetails.find(detail => detail.levelId === levelId + 1);
 
-            await NotificationHub.findOneAndUpdate(
-                {relatedEntityId:id},
-                {
-                    levelId:nextRoleDetail.levelId,
-                    roleId:nextRoleDetail.roleId,
-                    status:'Pending'
-                }
+        await addSignatureAndRemarks(id, req.user.roleId, levelId, remarks, req.user._id, req.user.userName);
 
-                
-            );
-
-            //Emit notification
-
-            notificationEmitter.emit('notification', {
-                userRoleId:nextRoleDetail.roleId,
-                count:1
-            })
-            
-
-            return res.status(200).json({message:'Cost Centre updated to next level', costCentre})
-        } else {
-            costCentre.status = 'Approved'
+        if (nextRoleDetail) {
+            costCentre.levelId = nextRoleDetail.levelId;
             await costCentre.save();
 
             await NotificationHub.findOneAndUpdate(
+                { relatedEntityId: id },
                 {
-                    relatedEntityId:id
-                },
-                {
-                    status:'Approved'
+                    levelId: nextRoleDetail.levelId,
+                    roleId: nextRoleDetail.roleId,
+                    pathId: nextRoleDetail.pathId,
+                    status: 'Pending'
                 }
             );
-            
-            return res.status(200).json({message:'Cost Centre Approved Successfully'})
+
+            notificationEmitter.emit('notification', {
+                userRoleId: nextRoleDetail.roleId,
+                count: 1
+            });
+
+            return res.status(200).json({ message: 'Cost Centre updated to next level', costCentre });
+        } else {
+            costCentre.status = 'Approved';
+            await costCentre.save();
+
+            await NotificationHub.findOneAndUpdate(
+                { relatedEntityId: id },
+                { status: 'Approved' }
+            );
+
+            return res.status(200).json({ message: 'Cost Centre Approved Successfully' });
         }
-        
     } catch (error) {
         console.error('Error updating cost centre:', error);
         res.status(500).json({ message: 'Server error', error });
-        
     }
-}
+};
 
 // check cost centre number exists
 
@@ -244,30 +251,34 @@ const checkCCNoExists = async(req,res)=>{
 }
 
 // Reject Cost Centre
-
-const rejectCostCentre = async (req, res)=>{
+const rejectCostCentre = async (req, res) => {
     try {
         const {id} = req.params
+        const {remarks } = req.body;
 
-        const costCentre = await CostCentre.findById(id)
-        if(!costCentre){
-            return res.status(404).json({messge:'Cost Centre not found'})
+        const costCentre = await CostCentre.findOne({ _id: id, status: 'Verification' });
+        if (!costCentre) {
+            return res.status(404).json({ message: 'Cost Centre not found for verification' });
         }
+
+        const { levelId } = costCentre;
+
         costCentre.status = 'Rejected';
-        await costCentre.save()
+        await costCentre.save();
 
         await NotificationHub.findOneAndUpdate(
-            {relatedEntityId:id},
-            {status:'Rejected'}
-        )
-        res.status(200).json({message:'Cost Centre rejected successfully', costCentre})
-        
+            { relatedEntityId: id },
+            { status: 'Rejected' }
+        );
+
+        await addSignatureAndRemarks(id, req.user.roleId, levelId, remarks, req.user._id, req.user.userName);
+
+        res.status(200).json({ message: 'Cost Centre rejected successfully' });
     } catch (error) {
         console.error('Error rejecting cost centre:', error);
-        res.status(500).json({ message: 'Server error', error })
-        
+        res.status(500).json({ message: 'Server error', error });
     }
-}
+};
 
 // Get an eligible cost centre for  CC Budget Assign 
 

@@ -38,7 +38,16 @@ const accountGroupsSchema = new Schema({
     isBuiltIn:{
         type:Boolean,
         default:false
-    }
-})
+    },
+    levelId: {
+        type: Number,
+        default: 1
+    },
+    status: {
+        type: String,
+        required: true,
+        enum: ['Rejected', 'Returned', 'Approved', 'Verification']
+    },
+},{ timestamps: true })
 
 module.exports = mongoose.model('accountgroup', accountGroupsSchema)

@@ -17,7 +17,7 @@ const menuRoute = require('./routes/menuRoute')
 const userMenu = require('./routes/userMenuRoute')
 const userPermission = require('./routes/permissionRoute')
 const ccState = require('./routes/userStates')
-const ccCodeRoute = require('./routes/costCentreRoute')
+const costCentreRoute = require('./routes/costCentreRoute')
 const NotificationRoute = require('./routes/notificationRoute')
 const UserCostCentreRoute = require('./routes/userCostCentreRoute')
 const AccountsGroupsRoute = require('./routes/accountsGroupRoute')
@@ -25,6 +25,8 @@ const AccountsLedgerRoute = require('./routes/accountsLedgerRoute')
 const DCACodeRoute = require('./routes/dcaRoute')
 const CCBudgetRoute = require('./routes/ccBudgetRoute')
 const DCABudgetRoute = require('./routes/dcaBudgetRoute')
+const ReportsRoute = require('./routes/reportsRoutes')
+const DashboardPreferenceRoute = require('./routes/dashboardPreferenceRoute')
 
 
     
@@ -57,7 +59,7 @@ app.use('/api/getmenu', menuRoute)
 app.use('/api/usermenudata', userMenu)
 app.use('/api/permissions', userPermission)
 app.use('/api/ccstate', ccState)
-app.use('/api/costcentres', ccCodeRoute )
+app.use('/api/costcentres', costCentreRoute)
 app.use('/api/notification', NotificationRoute)
 app.use('/api/userscostcentres', UserCostCentreRoute)
 app.use('/api/accountsgroup', AccountsGroupsRoute)
@@ -65,7 +67,8 @@ app.use('/api/accountsledger', AccountsLedgerRoute)
 app.use('/api/budgetdca', DCACodeRoute)
 app.use('/api/ccbudget', CCBudgetRoute)
 app.use('/api/dcabudgetaccount', DCABudgetRoute)
-
+app.use('/api/reports/',ReportsRoute)
+app.use('/api/dashboard/', DashboardPreferenceRoute)
 
 // SSE route
 

@@ -41,9 +41,20 @@ const accountsLedgerSchema = new Schema({
     },
     balanceAsOn:{
         type:Date
-    }
+    },
+    levelId: {
+        type: Number,
+        default: 1
+    },
+    status: {
+        type: String,
+        required: true,
+        enum: ['Rejected', 'Returned', 'Approved', 'Verification']
+    },
+  
 
-})
+},{ timestamps: true })
+
 accountsLedgerSchema.pre('save', async function(next){
     try {
         if(!this.balanceType){
