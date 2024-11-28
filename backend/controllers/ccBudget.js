@@ -125,12 +125,8 @@ const assignCCBudget = async (req, res)=>{
 
 const getCCBudgetForVerification = async (req, res)=>{
    
-    const userRoleId = parseInt(req.query.userRoleId);
-   
-
-    try {
-
-      
+    const userRoleId = parseInt(req.query.userRoleId); 
+    try { 
         
         const userRole = await UserRoles.findOne({roleId:userRoleId})
         if(!userRole){

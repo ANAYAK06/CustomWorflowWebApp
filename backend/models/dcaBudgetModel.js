@@ -49,6 +49,11 @@ const dcaBudgetSchema = new mongoose.Schema({
         required: true,
         enum: ['Rejected', 'Returned', 'Approved', 'Verification']
     },
+    referenceNumber: {
+        type: String,
+        required: true,
+        index: true
+    }
   
    
 }, { timestamps: true });

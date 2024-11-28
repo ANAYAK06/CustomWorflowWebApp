@@ -2,7 +2,9 @@ const express = require ('express')
 const mongoose = require('mongoose')
 const notificationEmitter = require('./notificationEmitter')
 const cors = require('cors')
-
+const path = require('path') 
+const fileConfig = require('./config/fileConfig')
+const setupUploadDirectories = require('./scripts/setupUploads')
 require('dotenv').config()
 
 
@@ -27,14 +29,24 @@ const CCBudgetRoute = require('./routes/ccBudgetRoute')
 const DCABudgetRoute = require('./routes/dcaBudgetRoute')
 const ReportsRoute = require('./routes/reportsRoutes')
 const DashboardPreferenceRoute = require('./routes/dashboardPreferenceRoute')
+const bankAccountRoutes = require('./routes/bankAccountsRoute')
+const loanRoutes = require('./routes/LoanAccountRoute')
+const fixedDepositRoute = require('./routes/fixedDepositRoute')
+const tdsRoute = require('./routes/tdsRoute')
 
-
+const bussinessOppertunityRoute = require('./routes/businessOppertunityRoute')
+const boqRoute = require('./routes/boqRoutes')
     
 
 
 
 
 const app = express()
+
+
+app.use('/public', express.static('public'));
+
+setupUploadDirectories().catch(console.error);
 
 
 
@@ -49,6 +61,10 @@ app.use(express.json())
 // cors
 app.use(cors())
 
+
+app.use('/' + fileConfig.UPLOAD_BASE_DIR, 
+    express.static(path.join(__dirname, fileConfig.UPLOAD_BASE_DIR))
+);
 //routes
 
 app.use('/api/cctype', ccTypeRoute)
@@ -69,8 +85,16 @@ app.use('/api/ccbudget', CCBudgetRoute)
 app.use('/api/dcabudgetaccount', DCABudgetRoute)
 app.use('/api/reports/',ReportsRoute)
 app.use('/api/dashboard/', DashboardPreferenceRoute)
+app.use('/api/bankaccount', bankAccountRoutes)
+app.use('/api/loanaccounts',loanRoutes )
+app.use('/api/fixeddeposit', fixedDepositRoute)
+app.use('/api/tdsaccount', tdsRoute)
+app.use('/api/businessoppertunity', bussinessOppertunityRoute)
+app.use('/api/clientboq', boqRoute )
 
-// SSE route
+
+
+// SSE route 
 
 app.get('/see/notification', (req, res)=>{
     const userRoleId = parseInt(req.query.userRoleId)
