@@ -48,18 +48,7 @@ const boqItemSchema = new Schema({
         type: Number,
         required: true
     },
-    scopeOfSupply: {
-        type: String,
-        required: true
-    },
-    installation: {
-        type: String,
-        required: true
-    },
-    erectionSupervision: {
-        type: String,
-        required: true
-    },
+   
     unitRate: {
         type: Number,
         required: true
@@ -107,6 +96,23 @@ const boqSchema = new Schema({
         type: Number,
         required: true
     },
+    originalAmount: {  
+        type: Number,
+        
+    },
+    variationAcceptance: {  // Added new field
+        type: Number,
+        required: true,
+        min: 0,
+        max: 100,
+        default: 0,
+        validate: {
+            validator: function(v) {
+                return v >= 0 && v <= 100;
+            },
+            message: props => `${props.value} is not a valid percentage! Value must be between 0 and 100`
+        }
+    },
     checklist: [{
         checklistId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -134,7 +140,7 @@ const boqSchema = new Schema({
     },
     boqStatus:{
         type: String,
-        enum:['Submitted','Accepted','Returned', 'Rejected','Revision'],
+        enum:['Submitted','Accepted','Returned', 'Rejected','Revision','prepareToSubmit','submittedToClient','won', 'lost'],
         default:'Submitted'
     },
     status: {
@@ -222,19 +228,32 @@ boqSchema.post('save', function(error, doc, next) {
         next(error);
     }
 });
-
-boqSchema.pre('save', async function(next) {
+boqSchema.pre('validate', async function(next) {
     try {
         if (this.isNew) {
-            // Generate itemId for each item based on offerNumber
-            const baseId = this.offerNumber ? 
-                this.offerNumber.replace(/\//g, '-') : 
-                'TEMP';
+            const businessOpp = await businessOpportunityModel.findById(this.businessOpportunity);
+            
+            if (!businessOpp) {
+                throw new Error('Business opportunity not found');
+            }
 
+            // Take only first 3 characters from client name and convert to uppercase
+            const clientCode = businessOpp.client.name
+                .substring(0, 3)  // Take first 3 characters only
+                .replace(/[^a-zA-Z]/g, '')  // Remove any non-alphabet characters
+                .toUpperCase();
+
+            let basePrefix;
+            if (businessOpp.type === 'TENDER' && businessOpp.tenderDetails?.tenderNumber) {
+                basePrefix = `${businessOpp.opportunityNumber.replace(/\//g, '-')}-${clientCode}-${businessOpp.tenderDetails.tenderNumber}`;
+            } else {
+                basePrefix = `${businessOpp.opportunityNumber.replace(/\//g, '-')}-${clientCode}-QTA`;
+            }
+
+            // Generate itemCode for each item
             this.items.forEach((item, index) => {
-                if (!item.itemId) {
-                    // Format: EPPL-EI-24-11-00001-CIC001
-                    item.itemId = `${baseId}-CIC${(index + 1).toString().padStart(3, '0')}`;
+                if (!item.itemCode) {
+                    item.itemCode = `${basePrefix}-CIC${(index + 1).toString().padStart(3, '0')}`;
                 }
             });
         }
@@ -244,7 +263,6 @@ boqSchema.pre('save', async function(next) {
         next(error);
     }
 });
-
 
 // Add helper methods for attachments
 boqSchema.methods.addAttachment = function(attachment) {

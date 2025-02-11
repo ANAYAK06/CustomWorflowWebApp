@@ -36,7 +36,18 @@ const tdsRoute = require('./routes/tdsRoute')
 
 const bussinessOppertunityRoute = require('./routes/businessOppertunityRoute')
 const boqRoute = require('./routes/boqRoutes')
+const itemCodeRoute = require('./routes/inventoryMoudleRoute/itemCodeRoute')
+const hsnSacCodeRoute = require('./routes/taxModuleRoute/hsnSacRoute')
+const unitRoute = require('./routes/inventoryMoudleRoute/unitRoute')
+const clientBOQRoute = require('./routes/projectModuleRoute/clientBoqRoute')
+
+const clientRoute = require('./routes/accountsModuleRoute/clientRoute')
+
+
     
+
+//tracking registrations
+const trackingRoute = require('./routes/trackingRoutes/trackingRoute')
 
 
 
@@ -60,6 +71,8 @@ app.use(express.json())
 
 // cors
 app.use(cors())
+
+
 
 
 app.use('/' + fileConfig.UPLOAD_BASE_DIR, 
@@ -91,6 +104,12 @@ app.use('/api/fixeddeposit', fixedDepositRoute)
 app.use('/api/tdsaccount', tdsRoute)
 app.use('/api/businessoppertunity', bussinessOppertunityRoute)
 app.use('/api/clientboq', boqRoute )
+app.use('/api/itemcode',itemCodeRoute)
+app.use('/api/hsnsaccode', hsnSacCodeRoute)
+app.use('/api/itemcodeunit', unitRoute)
+app.use('/api/clientboq', clientBOQRoute)
+app.use('/api/client', clientRoute)
+app.use('/api/tracking', trackingRoute)
 
 
 

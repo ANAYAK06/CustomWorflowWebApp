@@ -109,10 +109,81 @@ const createNewCostCentre = async (req, res) => {
 
 // get All CC Data
 
-const getAllCostCentreData = async(req, res)=>{
-    const CCDetails = await CostCentre.find({}).sort({createdAt: -1})
-    res.status(200).json(CCDetails)
-}
+// Controller for getting all cost centre data
+const getAllCostCentreData = async (req, res) => {
+    try {
+        const CCDetails = await CostCentre.find({})
+            .sort({ createdAt: -1 })
+            .lean(); // Use lean() for better performance since we don't need Mongoose document methods
+
+        if (!CCDetails) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'No cost centres found' 
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: CCDetails,
+            count: CCDetails.length
+        });
+    } catch (error) {
+        console.error('Error fetching cost centres:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error fetching cost centres',
+            error: error.message 
+        });
+    }
+};
+
+const getAllCCCode = async (req, res) => {
+    try {
+        console.log('Fetching CC codes for dropdown');
+        
+        const CCCodes = await CostCentre.find(
+            { status: "Approved" },
+            { 
+                ccNo: 1,
+                ccName: 1,
+                location: 1,
+                _id: 1
+            }
+        ).lean().sort({ createdAt: -1 });
+
+        console.log(`Found ${CCCodes.length} approved cost centers`);
+
+        if (!CCCodes || CCCodes.length === 0) {
+            return res.status(200).json({  // Changed to 200 with empty array
+                success: true,
+                data: []
+            });
+        }
+
+        const formattedCCCodes = CCCodes.map(cc => ({
+            value: cc.ccNo,
+            label: `${cc.ccNo} - ${cc.ccName}`,
+            location: cc.location,
+            id: cc._id.toString()  // Convert ObjectId to string
+        }));
+
+        console.log('Sending formatted CC codes:', formattedCCCodes);
+
+        return res.status(200).json({
+            success: true,
+            data: formattedCCCodes
+        });
+        
+    } catch (error) {
+        console.error('Error fetching cost centre codes:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+};
+
 
 // get new CC Data for verification next level 
 const getCCDataforVerification = async (req, res) => {
@@ -337,5 +408,6 @@ module.exports = {
     updateCostCentre,
     checkCCNoExists,
     rejectCostCentre,
-    getEligibleCCForBudgetAssign
+    getEligibleCCForBudgetAssign,
+    getAllCCCode
 }

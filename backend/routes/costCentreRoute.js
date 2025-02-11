@@ -8,7 +8,8 @@ const {createNewCostCentre,
     updateCostCentre, 
     checkCCNoExists, 
     rejectCostCentre, 
-    getEligibleCCForBudgetAssign} = require('../controllers/cccode')
+    getEligibleCCForBudgetAssign,
+    getAllCCCode} = require('../controllers/cccode')
 
 
 const router = express.Router()
@@ -42,6 +43,11 @@ router.put('/rejectcostcentre/:id',verifyToken, rejectCostCentre)
 // cost Centre for CC Budget Assign 
 
 router.get('/geteligibleccforbudgetassign', getEligibleCCForBudgetAssign)
+
+// get cc codes approved cc codes for dropdown
+
+router.get('/getcccodes', verifyToken, getAllCCCode)
+
 
 
 module.exports = router

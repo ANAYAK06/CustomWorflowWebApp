@@ -55,6 +55,10 @@ const jointVentureSchema = new Schema({
         required: true,
         trim: true
     },
+    isFrontParty: {
+        type: Boolean,
+        default: false
+    },
     contactEmail: {
         type: String,
         required: true,
@@ -176,7 +180,7 @@ const businessOpportunitySchema = new Schema({
         default: false
     },
     jointVentureDetails: {
-        type: jointVentureSchema,
+        type: [jointVentureSchema],
         required: function() {
             return this.jointVentureAcceptable === true ;
         },

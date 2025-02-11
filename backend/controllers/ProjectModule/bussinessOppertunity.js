@@ -38,6 +38,38 @@ const createBusinessOpportunity = async (req, res) => {
             }
         }
 
+        // Joint Venture validations
+        if (jointVentureAcceptable && jointVentureDetails && jointVentureDetails.length > 0) {
+            // Validate front party
+            const frontParties = jointVentureDetails.filter(jv => jv.isFrontParty);
+            if (frontParties.length !== 1) {
+                return res.status(400).json({
+                    message: "Exactly one joint venture partner must be designated as the front party"
+                });
+            }
+
+            // Validate total share percentage
+            const totalShare = jointVentureDetails.reduce((sum, jv) => sum + jv.sharePercentage, 0);
+            if (Math.abs(totalShare - 100) > 0.01) {
+                return res.status(400).json({
+                    message: "Total share percentage of all joint venture partners must equal 100%"
+                });
+            }
+
+            // Validate required fields for each joint venture partner
+            const requiredJVFields = ['companyName', 'registrationNumber', 'sharePercentage', 
+                                    'contactPerson', 'contactEmail', 'contactPhone'];
+            const missingFields = jointVentureDetails.some(jv => 
+                requiredJVFields.some(field => !jv[field])
+            );
+
+            if (missingFields) {
+                return res.status(400).json({
+                    message: "All required fields must be provided for each joint venture partner"
+                });
+            }
+        }
+
         // Prepare opportunity data
         let opportunityData = {
             type,
@@ -49,7 +81,8 @@ const createBusinessOpportunity = async (req, res) => {
             estimatedValue,
             status: 'Verification',
             levelId: 1,
-            jointVentureAcceptable
+            jointVentureAcceptable,
+            jointVentureDetails: undefined
         };
 
         // Add tender-specific data if type is TENDER
@@ -58,8 +91,8 @@ const createBusinessOpportunity = async (req, res) => {
             opportunityData.tenderDetails = tenderDetails;
         }
 
-        // Add joint venture details only if acceptable and details are provided
-        if (jointVentureAcceptable && jointVentureDetails) {
+        // Add joint venture details if acceptable and provided
+        if (jointVentureAcceptable && jointVentureDetails && jointVentureDetails.length > 0) {
             opportunityData.jointVentureDetails = jointVentureDetails;
         }
 

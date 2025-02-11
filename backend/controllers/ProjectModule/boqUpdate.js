@@ -39,8 +39,7 @@ const checkRoleApproval = async (boqId, roleId, levelId) => {
  */
 const validateExcelStructure = (data) => {
     const requiredColumns = [
-        'Sl No', 'Description', 'Unit', 'Quantity', 
-        'Scope of Supply', 'Installation', 'Erection Supervision',
+        'Sl No', 'Description', 'Unit', 'Quantity', ,
         'Unit Rate', 'Minimum Rate', 'Amount'
     ];
 
@@ -71,9 +70,6 @@ const processExcelData = async (filePath) => {
             description: row['Description'],
             unit: row['Unit'],
             qty: parseFloat(row['Quantity']),
-            scopeOfSupply: row['Scope of Supply'],
-            installation: row['Installation'],
-            erectionSupervision: row['Erection Supervision'],
             unitRate: parseFloat(row['Unit Rate']),
             minimumRate: parseFloat(row['Minimum Rate']),
             amount: parseFloat(row['Amount']),
@@ -213,9 +209,6 @@ const createBOQ = async (req, res) => {
                 description: item.description,
                 unit: item.unit,
                 qty: item.qty,
-                scopeOfSupply: item.scopeOfSupply,
-                installation: item.installation,
-                erectionSupervision: item.erectionSupervision,
                 unitRate: item.unitRate,
                 minimumRate: item.minimumRate,
                 amount: item.amount,
@@ -289,9 +282,11 @@ const createBOQ = async (req, res) => {
             businessOpportunity: businessOpportunityId,
             items: processedItems,
             totalAmount,
+            originalAmount:totalAmount,
             attachments,
             checklist: checklistData,
             status: 'Verification',
+            variationAcceptance: req.body.variationAcceptance || 0,
             levelId: 1,
             createdBy: req.user._id,
             boqStatus: 'Submitted',
@@ -734,8 +729,7 @@ const getBOQById = async (req, res) => {
         const { id } = req.params;
         const boq = await BOQ.findById(id)
             .populate('businessOpportunity')
-            .populate('createdBy', 'userName')
-            .populate('updatedBy', 'userName');
+            
 
         if (!boq) {
             return res.status(404).json({
