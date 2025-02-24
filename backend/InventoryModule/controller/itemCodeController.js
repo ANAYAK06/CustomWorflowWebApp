@@ -1,6 +1,7 @@
 // baseCodeController.js
 const mongoose = require('mongoose');
 const ItemCode = require('../models/ItemCode');
+const SpecificationCode = require('../models/SpecificationCode');
 const Unit = require('../models/unit');
 const HsnSac = require('../../TaxModule/models/HsnSac');
 const DCA = require('../../models/dcacodeModel');
@@ -14,6 +15,7 @@ const XLSX = require('xlsx');
 const CodeGenerationService = require('../services/codeGenerationServices');
 const { trim } = require('validator');
 const { ASSET_CATEGORIES } = require('../constants/materialConstants');
+const SpecificationCodeGenerationService = require('../services/specificationCodeServices');
 
 // Initialize workflow services
 const baseCodeWorkflow = new WorkflowService({
@@ -38,7 +40,7 @@ const baseCodeWorkflow = new WorkflowService({
 
 const specificationWorkflow = new WorkflowService({
     workflowId: 152,
-    Model: ItemCode,
+    Model: SpecificationCode,
     entityType: 'Specification',
     getNotificationMessage: (entity, action, specData) => {
         const specCode = specData?.fullCode || '';
@@ -73,7 +75,7 @@ const validateBaseCodeData = async (data) => {
         throw new Error(`Item name "${data.itemName}" already exists`);
     }
 
-    const hsnSac = await HsnSac.findById(data.hsnSac);
+    const hsnSac = await HsnSac.findOne({ code: data.hsnSac });
     if (!hsnSac) {
         throw new Error('Invalid HSN/SAC code');
     }
@@ -101,126 +103,99 @@ const validateBaseCodeData = async (data) => {
 
 
 // Base Code Creation
+
 const createBaseCode = async (req, res) => {
-    let uploadedFiles = null;
     try {
         const isExcelUpload = req.body.isExcelUpload === 'true';
+        
         if (isExcelUpload) {
-            await new Promise((resolve, reject) => {
-                multerConfig.upload(req, res, (err) => {
-                    if (err) {
-                        console.error('Multer upload error:', err);
-                        reject(new Error('File upload failed'));
-                    }
-                    uploadedFiles = req.files;
-                    resolve();
-                });
-            });
+            let parsedData;
+            try {
+                parsedData = JSON.parse(req.body.data);
+                console.log('Parsed bulk data:', parsedData);
 
-            if (!req.files?.excelFile?.[0]) {
-                throw new Error('Excel file is required');
-            }
+                const remarks = req.body.remarks || 'Bulk upload';
+                const batchId = new mongoose.Types.ObjectId();
+                const results = { success: [], errors: [] };
 
-            const remarks = req.body.remarks || 'Bulk upload';
-            const workbook = XLSX.read(req.files.excelFile[0].buffer, { type: 'buffer' });
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const data = XLSX.utils.sheet_to_json(worksheet);
+                for (const item of parsedData) {
+                    try {
+                        // Generate code
+                        const { nameCode, baseCode } = await CodeGenerationService.generateNextCode(
+                            item.type,
+                            item.categoryCode,
+                            item.majorGroupCode
+                        );
 
-            const batchId = new mongoose.Types.ObjectId();
-            const results = { success: [], errors: [] };
+                        const itemToCreate = {
+                            type: item.type,
+                            categoryCode: item.categoryCode,
+                            majorGroupCode: item.majorGroupCode,
+                            itemName: item.itemName,
+                            primaryUnit: item.primaryUnit,
+                            hsnSac: item.hsnSac,
+                            dcaCode: item.dcaCode,
+                            subDcaCode: item.subDcaCode,
+                            isAsset: item.isAsset || false,
+                            nameCode,
+                            baseCode,
+                            uploadBatch: batchId,
+                            remarks,
+                            status: 'Verification',
+                            levelId: 1,
+                            active: true
+                        };
 
-            for (const [index, row] of data.entries()) {
-                try {
-                    // Explicitly handle each field
-                    const type = row['type']?.toString().trim();
-                    const categoryCode = row['categoryCode']?.toString().trim();
-                    const majorGroupCode = row['majorGroupCode']?.toString().trim()|| '';
-                    const itemName = row['itemName']?.toString().trim() || '';
-                    const primaryUnit = row['primaryUnit']?.toString().trim() || '';
-                    const hsnSacCode = row['hsnSac']?.toString().trim() || '';
-                    const dcaCode = row['dcaCode']?.toString().trim() || '';
-                    const subDcaCode = row['subDcaCode']?.toString().trim() || '';
-                    const isAsset = row['isAsset']?.toString().toLowerCase() === 'yes';
-
-                    // Create base item object
-                    const baseItem = {
-                        type,
-                        categoryCode,
-                        majorGroupCode,
-                        itemName,
-                        primaryUnit,
-                        hsnSac: hsnSacCode,
-                        dcaCode,
-                        subDcaCode,
-                        isAsset,
-                        status: 'Verification',
-                        levelId: 1,
-                        active: true,
-                        uploadBatch: batchId,
-                        remarks
-                    };
-
-                    // Generate code
-                    const { nameCode, baseCode } = await CodeGenerationService.generateNextCode(
-                        type,
-                        categoryCode,
-                        majorGroupCode
-                    );
-
-                    const processedItem = {
-                        ...baseItem,
-                        nameCode,
-                        baseCode
-                    };
-
-                    // Handle asset category if needed
-                    if (isAsset) {
-                        const assetCategory = row['Asset Category']?.toString().trim() || '';
-                        if (!assetCategory || !ASSET_CATEGORIES.includes(assetCategory)) {
-                            throw new Error('Valid asset category is required for assets');
+                        // Handle asset category if it exists
+                        if (itemToCreate.isAsset && item.assetCategory) {
+                            itemToCreate.assetCategory = item.assetCategory;
                         }
-                        processedItem.assetCategory = assetCategory;
+
+                        // Validate
+                        await validateBaseCodeData(itemToCreate);
+
+                        // Create through workflow
+                        const result = await baseCodeWorkflow.createEntity(
+                            itemToCreate,
+                            req.user,
+                            remarks
+                        );
+
+                        results.success.push({
+                            itemName: itemToCreate.itemName,
+                            baseCode: result.entity.baseCode
+                        });
+                    } catch (error) {
+                        console.error('Error processing item:', error);
+                        results.errors.push({
+                            itemName: item.itemName || 'Unknown Item',
+                            error: error.message
+                        });
                     }
-
-                    // Validate
-                    await validateBaseCodeData(processedItem);
-
-                    // Create through workflow
-                    const result = await baseCodeWorkflow.createEntity(
-                        processedItem,
-                        req.user,
-                        remarks
-                    );
-
-                    results.success.push({
-                        rowIndex: index + 2,
-                        itemName: processedItem.itemName,
-                        baseCode: result.entity.baseCode
-                    });
-                } catch (error) {
-                    results.errors.push({
-                        rowIndex: index + 2,
-                        itemName: row['Item Name'] || 'Unknown Item',
-                        error: error.message
-                    });
                 }
-            }
 
-            if (uploadedFiles) {
-                await cleanupFiles(uploadedFiles);
+                return res.status(201).json({
+                    success: true,
+                    message: 'Base codes processed successfully',
+                    data: {
+                        batchId,
+                        results
+                    }
+                });
+            } catch (error) {
+                console.error('JSON parsing error:', error);
+                throw new Error(`Invalid data format: ${error.message}`);
             }
-
-            return res.status(results.errors.length ? 207 : 201).json({
-                success: true,
-                message: 'Base codes processed from Excel',
-                data: {
-                    batchId,
-                    results
-                }
-            });
         } else {
-            // Single item creation (unchanged)
+            // Single item creation remains unchanged
             const data = req.body;
+
+            if (data.isAsset && !data.assetCategory) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Asset category is required when isAsset is true'
+                });
+            }
             
             const { nameCode, baseCode } = await CodeGenerationService.generateNextCode(
                 data.type,
@@ -254,9 +229,6 @@ const createBaseCode = async (req, res) => {
             });
         }
     } catch (error) {
-        if (uploadedFiles) {
-            await cleanupFiles(uploadedFiles);
-        }
         console.error('Base code creation error:', error);
         res.status(500).json({
             success: false,
@@ -415,13 +387,16 @@ const rejectBaseCode = async (req, res) => {
     }
 };
 
+
 // Validate Specification Data
 const validateSpecificationData = async (itemCode, data) => {
-    // Check if make+specification combination already exists
-    const existingSpec = itemCode.specifications.find(
-        spec => spec.make.toLowerCase() === data.make.toLowerCase() && 
-               spec.specification.toLowerCase() === data.specification.toLowerCase()
-    );
+    // Check if make+specification combination already exists for this base code
+    const existingSpec = await SpecificationCode.findOne({
+        baseCode: itemCode.baseCode,
+        make: { $regex: new RegExp(`^${data.make}$`, 'i') },
+        specification: { $regex: new RegExp(`^${data.specification || ''}$`, 'i') }
+    });
+    
     if (existingSpec) {
         throw new Error(`Specification with make "${data.make}" already exists for this item`);
     }
@@ -461,245 +436,352 @@ const validateSpecificationData = async (itemCode, data) => {
 };
 
 
-
 // Create Specification
-const createSpecification = async (req, res) => {
+// Helper function to process a single specification
+const processSpecification = async (data, user, remarks = '') => {
     try {
-        const { itemCodeId } = req.params;
-        const { specifications, bulkUpload } = req.body;
-
-        const itemCode = await ItemCode.findById(itemCodeId);
+        // Find the item code by baseCode
+        const itemCode = await ItemCode.findOne({ baseCode: data.baseCode });
         if (!itemCode) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Base code not found' 
-            });
+            throw new Error(`Item code not found for base code: ${data.baseCode}`);
         }
 
         if (itemCode.status !== 'Approved') {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Cannot add specifications to unapproved base code' 
-            });
+            throw new Error(`Base code ${data.baseCode} is not approved`);
         }
 
-        const results = { success: [], errors: [] };
-        
-        // Process single specification
-        const processSpecification = async (specData) => {
-            try {
-                await validateSpecificationData(itemCode, specData);
-                
-                const priceConversions = await calculatePriceConversions(
-                    specData.primaryUnit,
-                    specData.allowedUnits || [],
-                    specData.standardPrice
-                );
-                  
-                const savedItemCode = await itemCode.addSpecification({
-                    ...specData,
-                    status: 'Verification',
-                    levelId: 1,
-                    priceConversions
-                });
+        // Validate the specification data
+        await validateSpecificationData(itemCode, data);
 
-                const newSpec = savedItemCode.specifications[savedItemCode.specifications.length - 1];
-                
-                
-                await specificationWorkflow.createEntity(
-                    itemCode,
-                    req.user,
-                    {
-                        metadata: {
-                            specificationId: newSpec._id
-                        }
-                    }
-                );
+        // Generate specification code
+        const specCode = await SpecificationCodeGenerationService.generateNextSpecificationCode(itemCode._id);
 
-                return newSpec;
-            } catch (error) {
-                throw new Error(`Error processing specification ${currentIndex + 1}: ${error.message}`);
-            }
+        // Create the specification object - this is the key part that needs fixing
+        const specificationData = {
+            baseCodeId: itemCode._id,
+            baseCode: itemCode.baseCode,
+            scode: specCode.scode,
+            fullCode: specCode.fullCode,
+            make: data.make.trim(),
+            specification: data.specification?.trim() || '',
+            primaryUnit: data.primaryUnit,  // Make sure this is the ObjectId
+            standardPrice: parseFloat(data.standardPrice),
+            allowedUnits: data.allowedUnits, // Array of {unit: ObjectId, isDefault: boolean}
+            priceReferences: data.priceReferences,
+            status: 'Verification',
+            levelId: 1,
+            active: true,
+            remarks
         };
 
-        if (bulkUpload) {
-            // Handle bulk specifications
-            const specsToProcess = Array.isArray(specifications) ? specifications : [specifications];
-            
-            for (let i = 0; i < specsToProcess.length; i++) {
-                try {
-                    const result = await processSpecification(specsToProcess[i], i);
-                    results.success.push({
-                        make: specsToProcess[i].make,
-                        specification: specsToProcess[i].specification,
-                        fullCode: result.fullCode,
-                        message: 'Successfully created'
-                    });
-                } catch (error) {
-                    results.errors.push({
-                        make: specsToProcess[i].make,
-                        specification: specsToProcess[i].specification,
-                        error: error.message
-                    });
-                }
-            }
+        // Create specification through workflow
+        // Note: Now passing specificationData directly, not as a nested property
+        const result = await specificationWorkflow.createEntity(
+            specificationData,
+            user,
+            remarks
+        );
 
-            return res.status(201).json({
-                success: true,
-                message: 'Bulk specifications processing completed',
-                data: results
-            });
+        return {
+            success: true,
+            baseCode: itemCode.baseCode,
+            data: result.entity
+        };
+
+    } catch (error) {
+        throw new Error(`Failed to process specification for base code ${data.baseCode}: ${error.message}`);
+    }
+};
+// Main specification creation function
+const createSpecification = async (req, res) => {
+    try {
+        const isExcelUpload = req.body.isExcelUpload === 'true';
+        
+        if (isExcelUpload) {
+            let parsedData;
+            try {
+                parsedData = JSON.parse(req.body.data);
+                console.log('Parsed bulk data:', parsedData);
+
+                const remarks = req.body.remarks || 'Bulk upload';
+                const batchId = new mongoose.Types.ObjectId();
+                const results = { success: [], errors: [] };
+
+                for (const spec of parsedData) {
+                    try {
+                        const result = await processSpecification(
+                            {
+                                ...spec,
+                                batchId
+                            },
+                            req.user,
+                            remarks
+                        );
+
+                        results.success.push({
+                            make: spec.make,
+                            specification: spec.specification,
+                            baseCode: spec.baseCode,
+                            fullCode: result.data.specifications[result.data.specifications.length - 1].fullCode
+                        });
+                    } catch (error) {
+                        console.error('Error processing specification:', error);
+                        results.errors.push({
+                            make: spec.make || 'Unknown Make',
+                            specification: spec.specification || 'Unknown Specification',
+                            baseCode: spec.baseCode,
+                            error: error.message
+                        });
+                    }
+                }
+
+                return res.status(201).json({
+                    success: true,
+                    message: 'Specifications processed successfully',
+                    data: {
+                        batchId,
+                        results
+                    }
+                });
+            } catch (error) {
+                console.error('JSON parsing error:', error);
+                throw new Error(`Invalid data format: ${error.message}`);
+            }
         } else {
-            // Handle single specification
-            const result = await processSpecification(req.body, 0);
+            // Single specification creation
+            const result = await processSpecification(
+                req.body,
+                req.user,
+                req.body.remarks || 'Single specification creation'
+            );
+
             return res.status(201).json({
                 success: true,
                 message: 'Specification created successfully',
-                data: result
+                data: result.data
             });
         }
-
     } catch (error) {
-        res.status(500).json({
+        console.error('Specification creation error:', error);
+        return res.status(500).json({
             success: false,
-            message: 'Failed to create specification(s)',
-            error: error.message
+            error: error.message || 'Internal server error'
         });
     }
 };
 
 // Get Specifications for Verification
+// Get Specifications for Verification
 const getSpecificationsForVerification = async (req, res) => {
     try {
+        console.log('Hitting specification verification route');
         const userRoleId = parseInt(req.query.userRoleId);
-        const { type } = req.query; // 'bulk' or 'single'
+        const { type } = req.query;
 
         if (isNaN(userRoleId)) {
+            return res.status(400).json({ message: 'Invalid userRoleId' });
+        }
+        
+        // Determine query options based on type
+        const queryOptions = {
+            query: type === 'bulk' 
+                ? { uploadBatch: { $exists: true } } 
+                : { uploadBatch: { $exists: false } }
+        };
+        
+        // Add sorting if needed for bulk
+        if (type === 'bulk') {
+            queryOptions.sort = { uploadBatch: 1 };
+        }
+        
+        // Get specifications from workflow service
+        const result = await specificationWorkflow.getEntitiesForVerification(userRoleId, queryOptions);
+        
+        if (!result.data || !Array.isArray(result.data)) {
+            return res.json({
+                success: true,
+                message: 'No specifications found for verification',
+                specifications: []
+            });
+        }
+        
+        // Get all baseCodeIds and unitIds for batch queries
+        const baseCodeIds = result.data.map(spec => spec.baseCodeId).filter(Boolean);
+        const primaryUnitIds = result.data.map(spec => spec.primaryUnit).filter(Boolean);
+        
+        // Create sets for unique IDs
+        const uniqueBaseCodeIds = [...new Set(baseCodeIds.map(id => id.toString()))];
+        const uniquePrimaryUnitIds = [...new Set(primaryUnitIds.map(id => id.toString()))];
+        
+        // Get all allowed unit IDs
+        const allowedUnitIds = [];
+        for (const spec of result.data) {
+            if (spec.allowedUnits && Array.isArray(spec.allowedUnits)) {
+                for (const unitData of spec.allowedUnits) {
+                    if (unitData.unit) {
+                        allowedUnitIds.push(unitData.unit.toString());
+                    }
+                }
+            }
+        }
+        const uniqueAllowedUnitIds = [...new Set(allowedUnitIds)];
+        
+        // Batch fetch all needed data
+        const [itemCodes, primaryUnits, allowedUnits] = await Promise.all([
+            ItemCode.find({ _id: { $in: uniqueBaseCodeIds } }).lean(),
+            Unit.find({ _id: { $in: uniquePrimaryUnitIds } }).lean(),
+            Unit.find({ _id: { $in: uniqueAllowedUnitIds } }).lean()
+        ]);
+        
+        // Create lookup maps
+        const itemCodeMap = itemCodes.reduce((map, item) => {
+            map[item._id.toString()] = item;
+            return map;
+        }, {});
+        
+        const primaryUnitMap = primaryUnits.reduce((map, unit) => {
+            map[unit._id.toString()] = unit;
+            return map;
+        }, {});
+        
+        const allowedUnitMap = allowedUnits.reduce((map, unit) => {
+            map[unit._id.toString()] = unit;
+            return map;
+        }, {});
+        
+        // Process specifications with the fetched data
+        const processedSpecs = result.data.map(spec => {
+            // Convert Mongoose document to plain object if needed
+            const specObj = spec.toObject ? spec.toObject({ virtuals: true }) : (spec._doc || spec);
+            
+            // Get item name from map
+            const itemCode = specObj.baseCodeId ? itemCodeMap[specObj.baseCodeId.toString()] : null;
+            const itemName = itemCode ? itemCode.itemName : 'Unknown';
+            
+            // Get primary unit from map
+            const primaryUnit = specObj.primaryUnit ? primaryUnitMap[specObj.primaryUnit.toString()] : null;
+            
+            // Process allowed units
+            const processedAllowedUnits = Array.isArray(specObj.allowedUnits)
+                ? specObj.allowedUnits.map(unitData => {
+                    const unitId = unitData.unit ? unitData.unit.toString() : null;
+                    const unit = unitId ? allowedUnitMap[unitId] : null;
+                    
+                    return {
+                        ...unitData,
+                        unit: unit ? {
+                            _id: unit._id,
+                            symbol: unit.symbol,
+                            name: unit.name
+                        } : unitData.unit
+                    };
+                })
+                : [];
+            
+            // Return the processed specification
+            return {
+                itemCodeId: specObj.baseCodeId,
+                baseCode: specObj.baseCode,
+                itemName: itemName,
+                specification: {
+                    ...specObj,
+                    primaryUnit: primaryUnit ? {
+                        _id: primaryUnit._id,
+                        symbol: primaryUnit.symbol,
+                        name: primaryUnit.name
+                    } : specObj.primaryUnit,
+                    allowedUnits: processedAllowedUnits,
+                    signatureAndRemarks: specObj.signatureAndRemarks || []
+                }
+            };
+        });
+        
+        return res.json({
+            success: true,
+            message: 'Specifications retrieved for verification',
+            specifications: processedSpecs
+        });
+    } catch (error) {
+        console.error('Error in getSpecificationsForVerification:', error);
+        res.status(500).json({ 
+            success: false,
+            error: error.message 
+        });
+    }
+};
+// Verify Specification
+const verifySpecification = async (req, res) => {
+    try {
+        const { itemCodeId, specificationId, bulk, specifications, remarks } = req.body;
+        
+        if (!remarks) {
             return res.status(400).json({ 
-                success: false, 
-                message: 'Invalid userRoleId provided' 
+                success: false,
+                message: "Remarks required" 
             });
         }
 
-        const result = await specificationWorkflow.getEntitiesForVerification(userRoleId);
-        
-        // Group specifications by base code for bulk operations
-        const specifications = result.data.reduce((acc, itemCode) => {
-            const verificationSpecs = itemCode.specifications.filter(s => s.status === 'Verification');
-            
-            verificationSpecs.forEach(spec => {
-                acc.push({
-                    itemCodeId: itemCode._id,
-                    baseCode: itemCode.baseCode,
-                    itemName: itemCode.itemName,
-                    specification: {
-                        ...spec,
-                        signatureAndRemarks: itemCode.signatureAndRemarks
+        const results = { success: [], errors: [] };
+
+        if (bulk && specifications && Array.isArray(specifications)) {
+            // Bulk verification
+            for (const spec of specifications) {
+                try {
+                    // Make sure we have the required ID
+                    if (!spec.specificationId) {
+                        throw new Error('Missing specification ID');
                     }
-                });
-            });
-            
-            return acc;
-        }, []);
 
-        if (type === 'bulk') {
-            // Group by base code for bulk operations
-            const groupedSpecs = specifications.reduce((acc, spec) => {
-                const baseCode = spec.baseCode;
-                if (!acc[baseCode]) {
-                    acc[baseCode] = [];
+                    const result = await specificationWorkflow.verifyEntity(
+                        spec.specificationId,
+                        req.user,
+                        remarks
+                    );
+
+                    results.success.push({ 
+                        specificationId: spec.specificationId, 
+                        itemCodeId: spec.itemCodeId,
+                        fullCode: result.data?.fullCode || 'Unknown' 
+                    });
+                } catch (error) {
+                    console.error('Error verifying specification:', error);
+                    results.errors.push({ 
+                        specificationId: spec.specificationId, 
+                        itemCodeId: spec.itemCodeId,
+                        error: error.message 
+                    });
                 }
-                acc[baseCode].push(spec);
-                return acc;
-            }, {});
-
-            return res.json({
-                success: true,
-                message: 'Grouped specifications retrieved for verification',
-                specifications: groupedSpecs
+            }
+        } else if (specificationId) {
+            // Single verification
+            try {
+                const result = await specificationWorkflow.verifyEntity(
+                    specificationId,
+                    req.user,
+                    remarks
+                );
+                return res.json({ success: true, data: result });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: "Either 'specificationId' or 'bulk' with 'specifications' is required"
             });
         }
 
         res.json({
             success: true,
-            message: 'Specifications retrieved for verification',
-            specifications
+            message: bulk ? 'Batch verification completed' : 'Specification verified',
+            results: bulk ? results : undefined
         });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
-
-// Verify Specification
-const verifySpecification = async (req, res) => {
-    try {
-        const { remarks, bulk, specifications } = req.body;
-        const { itemCodeId, specificationId } = req.params;
-
-        if (!remarks) {
-            return res.status(400).json({
-                success: false,
-                message: "Remarks are required for verification"
-            });
-        }
-
-        if (bulk && specifications) {
-            // Handle bulk verification
-            const results = { success: [], errors: [] };
-
-            for (const spec of specifications) {
-                try {
-                    const result = await specificationWorkflow.verifyEntity(
-                        spec.itemCodeId,
-                        req.user,
-                        remarks,
-                        { specificationId: spec.specificationId }
-                    );
-
-                    results.success.push({
-                        itemCodeId: spec.itemCodeId,
-                        specificationId: spec.specificationId,
-                        fullCode: result.data.fullCode,
-                        message: 'Successfully verified'
-                    });
-                } catch (error) {
-                    results.errors.push({
-                        itemCodeId: spec.itemCodeId,
-                        specificationId: spec.specificationId,
-                        error: error.message
-                    });
-                }
-            }
-
-            return res.json({
-                success: true,
-                message: 'Bulk specification verification completed',
-                data: results
-            });
-        } else {
-            // Handle single verification
-            const result = await specificationWorkflow.verifyEntity(
-                itemCodeId,
-                req.user,
-                remarks,
-                { specificationId }
-            );
-
-            return res.json({
-                success: true,
-                message: 'Specification verified successfully',
-                data: result
-            });
-        }
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
+        console.error('Error in verifySpecification:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
         });
     }
 };
@@ -707,75 +789,76 @@ const verifySpecification = async (req, res) => {
 // Reject Specification
 const rejectSpecification = async (req, res) => {
     try {
-        const { remarks, bulk, specifications } = req.body;
-        const { itemCodeId, specificationId } = req.params;
-
+        const { itemCodeId, specificationId, bulk, specifications, remarks } = req.body;
+        
         if (!remarks) {
-            return res.status(400).json({
+            return res.status(400).json({ 
                 success: false,
-                message: "Remarks are required for rejection"
+                message: "Remarks required" 
             });
         }
 
-        if (bulk && specifications) {
-            // Handle bulk rejection
-            const results = { success: [], errors: [] };
+        const results = { success: [], errors: [] };
 
+        if (bulk && specifications && Array.isArray(specifications)) {
+            // Bulk rejection
             for (const spec of specifications) {
                 try {
+                    // Make sure we have the required ID
+                    if (!spec.specificationId) {
+                        throw new Error('Missing specification ID');
+                    }
+
                     const result = await specificationWorkflow.rejectEntity(
-                        spec.itemCodeId,
+                        spec.specificationId,
                         req.user,
-                        remarks,
-                        { 
-                            specificationId: spec.specificationId,
-                            specificField: 'status'
-                        }
+                        remarks
                     );
 
-                    results.success.push({
+                    results.success.push({ 
+                        specificationId: spec.specificationId, 
                         itemCodeId: spec.itemCodeId,
-                        specificationId: spec.specificationId,
-                        fullCode: result.data.fullCode,
-                        message: 'Successfully rejected'
+                        fullCode: result.data?.fullCode || 'Unknown' 
                     });
                 } catch (error) {
-                    results.errors.push({
+                    console.error('Error rejecting specification:', error);
+                    results.errors.push({ 
+                        specificationId: spec.specificationId, 
                         itemCodeId: spec.itemCodeId,
-                        specificationId: spec.specificationId,
-                        error: error.message
+                        error: error.message 
                     });
                 }
             }
-
-            return res.json({
-                success: true,
-                message: 'Bulk specification rejection completed',
-                data: results
-            });
-        } else {
-            // Handle single rejection
-            const result = await specificationWorkflow.rejectEntity(
-                itemCodeId,
-                req.user,
-                remarks,
-                { 
+        } else if (specificationId) {
+            // Single rejection
+            try {
+                const result = await specificationWorkflow.rejectEntity(
                     specificationId,
-                    specificField: 'status'
-                }
-            );
-
-            return res.json({
-                success: true,
-                message: 'Specification rejected successfully',
-                data: result
+                    req.user,
+                    remarks
+                );
+                return res.json({ success: true, data: result });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: "Either 'specificationId' or 'bulk' with 'specifications' is required"
             });
         }
 
+        res.json({
+            success: true,
+            message: bulk ? 'Batch rejection completed' : 'Specification rejected',
+            results: bulk ? results : undefined
+        });
+
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
+        console.error('Error in rejectSpecification:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
         });
     }
 };
@@ -784,7 +867,7 @@ const getAllBaseCodes = async (req, res) => {
     try {
         const baseCodes = await ItemCode.find(
             { status: 'Approved', active: true },
-            'baseCode itemName type categoryCode majorGroupCode'
+            'baseCode itemName type categoryCode majorGroupCode dcaCode subDcaCode primaryUnit'
         ).sort({ baseCode: 1 });
 
         res.json({
@@ -1065,20 +1148,6 @@ const getSubDCACodesForDCA = async (req, res) => {
     }
 };
 
-// Add this function to properly transform Excel data
-const transformExcelData = (item) => {
-    return {
-        type: item['Type']?.trim().toUpperCase(),
-        categoryCode: item['Category Code']?.trim(),
-        majorGroupCode: item['Major Group Code']?.trim(),
-        itemName: item['Item Name']?.trim(),
-        primaryUnit: item['Primary Unit']?.trim(),
-        hsnSac: item['HSN/SAC Code']?.trim(),
-        dcaCode: item['DCA Code']?.trim(),
-        subDcaCode: item['Sub DCA Code']?.trim(),
-        isAsset: item['Is Asset']?.toLowerCase() === 'yes'
-    };
-};
 
 
 module.exports = {

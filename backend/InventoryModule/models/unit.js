@@ -44,6 +44,10 @@ const unitSchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Unit'
         },
+        toUnitSymbol: {  
+            type: String,
+            required: true
+        },
         factor: Number
     }],
     active: {
@@ -62,5 +66,8 @@ const unitSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+unitSchema.index({ name: 1, status: 1, createdAt: 1 }, { unique: true });
+unitSchema.index({ symbol: 1, status: 1, createdAt: 1 }, { unique: true });
 
 module.exports = mongoose.model('Unit', unitSchema);

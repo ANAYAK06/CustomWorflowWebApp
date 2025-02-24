@@ -13,18 +13,7 @@ const priceReferenceSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now }
 });
 
-const priceConversionSchema = new mongoose.Schema({
-    unit: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Unit',
-        required: true
-    },
-    rate: {
-        type: Number,
-        required: true,
-        min: 0
-    }
-});
+
 
 const specificationSchema = new mongoose.Schema({
     scode: {
@@ -64,7 +53,7 @@ const specificationSchema = new mongoose.Schema({
         required: true,
         min: 0
     },
-    priceConversions: [priceConversionSchema],
+    // priceConversions: [priceConversionSchema],
     priceReferences: [priceReferenceSchema],
     active: {
         type: Boolean,
@@ -79,57 +68,6 @@ const specificationSchema = new mongoose.Schema({
     levelId: {
         type: Number,
         default: 1
-    }
-});
-
-// Pre-save middleware for specifications to validate and calculate unit conversions
-specificationSchema.pre('save', async function(next) {
-    try {
-        // Validate primary unit exists in allowed units
-        const primaryUnitExists = this.allowedUnits.some(
-            au => au.unit.toString() === this.primaryUnit.toString()
-        );
-        if (!primaryUnitExists) {
-            this.allowedUnits.push({
-                unit: this.primaryUnit,
-                isDefault: true
-            });
-        }
-
-        // If priceConversions are provided, validate and calculate rates
-        if (this.priceConversions.length > 0) {
-            const primaryUnit = await Unit.findById(this.primaryUnit);
-            
-            // Validate all units are in allowedUnits
-            for (const conversion of this.priceConversions) {
-                const isAllowed = this.allowedUnits.some(
-                    au => au.unit.toString() === conversion.unit.toString()
-                );
-                if (!isAllowed) {
-                    throw new Error('Price conversion unit must be in allowed units');
-                }
-
-                // Get the target unit
-                const targetUnit = await Unit.findById(conversion.unit);
-                if (!primaryUnit || !targetUnit) {
-                    throw new Error('Invalid unit reference');
-                }
-
-                // Calculate conversion rate using UnitConversionService
-                const conversionFactor = await UnitConversionService.convert(
-                    1,
-                    primaryUnit.symbol,
-                    targetUnit.symbol
-                );
-
-                // Set the converted price rate
-                conversion.rate = this.standardPrice * conversionFactor;
-            }
-        }
-
-        next();
-    } catch (error) {
-        next(error);
     }
 });
 
@@ -222,7 +160,10 @@ const itemCodeSchema = new mongoose.Schema({
         default: true
     },
     remarks: String,
-    specifications: [specificationSchema]
+    specifications: [{
+        type:mongoose.Schema.Types.ObjectId,
+        ref: 'SpecificationCode'
+    }]
 }, {
     timestamps: true
 });

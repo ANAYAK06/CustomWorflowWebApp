@@ -14,7 +14,9 @@ const {
     updateConversion,
     getUnitsByType,
     getUnitConversions,
-    getUnitHistory
+    getUnitHistory,
+    getUnitsByCategory,
+    getAllowedUnitsByBaseCode
 } = require('../../InventoryModule/controller/unitController');
 
 const { verifyToken } = require('../../middlewares/requireAuth');
@@ -29,8 +31,8 @@ router.post('/bulk-upload', verifyToken, bulkUploadUnits);
 router.get('/verification', verifyToken, getUnitsForVerification);
 router.put('/verify/:id', verifyToken, updateUnitStatus);
 router.put('/verify/batch/:batchId', verifyToken, updateUnitStatus);
-router.put('/reject/:id', verifyToken, rejectUnit);
-router.put('/reject/batch/:batchId', verifyToken, rejectUnit);
+router.put('/reject', verifyToken, rejectUnit);
+
 
 // General Unit Routes
 router.get('/', verifyToken, getAllUnits);
@@ -38,9 +40,14 @@ router.get('/units/type/:type', verifyToken, getUnitsByType);
 router.get('/:id', verifyToken, getUnitById);
 router.get('/:id/history', verifyToken, getUnitHistory);
 router.put('/:id', verifyToken, updateUnit);
+router.get('/unit/:category', verifyToken, getUnitsByCategory);
 
 // Conversion Routes
 router.post('/conversion', verifyToken, updateConversion);
 router.get('/conversion/:unitSymbol', verifyToken, getUnitConversions);
+
+// Allowed Unit for an item
+
+router.get('/allowed/:primaryUnit', verifyToken, getAllowedUnitsByBaseCode)
 
 module.exports = router;

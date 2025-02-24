@@ -33,11 +33,12 @@ router.get('/base-code/:id', verifyToken, getBaseCodeById);      // Get base cod
 
 // Specification Routes
 // ------------------
-router.post('/base-code/:itemCodeId/specification', verifyToken, createSpecification);  // Handles both single and bulk
+router.post('/base-code/specification', verifyToken, createSpecification); // Handles both single and bulk
 router.get('/specification/verification', verifyToken, getSpecificationsForVerification);
 router.post('/specification/verify', verifyToken, verifySpecification);  // Handles both single and bulk
 router.post('/specification/reject', verifyToken, rejectSpecification);  // Handles both single and bulk
 router.get('/base-code/:baseCodeId/specifications', verifyToken, getSpecificationsByBaseCode);  // Get all specs for a base code
+
 
 // Search and Full Code Routes
 // --------------------------

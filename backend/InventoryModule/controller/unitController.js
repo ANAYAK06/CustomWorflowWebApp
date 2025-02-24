@@ -1,169 +1,29 @@
 const Unit = require('../models/unit');
-const Permission = require('../../models/permissionModel');
-const NotificationHub = require('../../models/notificationHubModel');
-const SignatureandRemarks = require('../../models/signatureAndRemarksmodel');
+const WorkflowService = require('../../controllers/workflowService');
 const { UnitConversionService } = require('../services/unitConversionService');
 const { UNIT_TYPES } = require('../constants/unitConstants');
-const notificationEmitter = require('../../notificationEmitter');
-const { addSignatureAndRemarks, getSignatureandRemakrs } = require('../../controllers/signatureAndRemarks');
 
-// Helper function to check if user can approve at current level
-const checkRoleApproval = async (unitId, roleId, levelId) => {
-    const unit = await Unit.findById(unitId);
-    if (!unit) {
-        throw new Error('Unit not found');
-    }
 
-    const signatures = await SignatureandRemarks.find({
-        entityId: unitId,
-        levelId: levelId,
-        roleId: roleId
-    });
-
-    if (signatures.length > 0) {
-        throw new Error('This unit has already been processed at your role level');
-    }
-
-    return true;
-};
-
-// Helper function to create notification
-const createNotification = async (unitId, workflowDetail, message) => {
-    const newNotification = new NotificationHub({
-        workflowId: 151,
-        roleId: workflowDetail.roleId,
-        pathId: workflowDetail.pathId,
-        levelId: workflowDetail.levelId,
-        relatedEntityId: unitId,
-        message: message,
-        status: 'Pending'
-    });
-    await newNotification.save();
-
-    notificationEmitter.emit('notification', {
-        userRoleId: workflowDetail.roleId,
-        count: 1
-    });
-
-    return newNotification;
-};
-
-// Helper function to process unit updates
-const processUnitUpdate = async (unitId, remarks, userRoleId, user) => {
-    const unit = await Unit.findById(unitId);
-    if (!unit) {
-        throw new Error('Unit not found');
-    }
-
-    const { levelId } = unit;
-    await checkRoleApproval(unitId, userRoleId, levelId);
-
-    const permission = await Permission.findOne({ workflowId: 151 });
-    if (!permission) {
-        throw new Error('Permission not found');
-    }
-
-    // Add signature and remarks
-    await addSignatureAndRemarks(
-        unitId,
-        userRoleId,
-        levelId,
-        remarks,
-        user._id,
-        user.userName
-    );
-
-    // Get next workflow level details
-    const nextRoleDetail = permission.workflowDetails.find(
-        detail => detail.levelId === levelId + 1
-    );
-
-    if (nextRoleDetail) {
-        // Move to next level
-        unit.levelId = nextRoleDetail.levelId;
-        unit.updatedBy = user._id;
-        await unit.save();
-
-        await NotificationHub.findOneAndUpdate(
-            { relatedEntityId: unitId, status: 'Pending' },
-            {
-                levelId: nextRoleDetail.levelId,
-                roleId: nextRoleDetail.roleId,
-                pathId: nextRoleDetail.pathId,
-                message: `Unit moved to next level of verification`,
-                updatedAt: new Date()
-            }
-        );
-
-        notificationEmitter.emit('notification', {
-            userRoleId: nextRoleDetail.roleId,
-            count: 1
-        });
-    } else {
-        // Final approval
-        unit.status = 'Approved';
-        unit.updatedBy = user._id;
-        await unit.save();
-
-        await NotificationHub.findOneAndUpdate(
-            { relatedEntityId: unitId, status: 'Pending' },
-            {
-                status: 'Approved',
-                message: 'Unit has been approved',
-                updatedAt: new Date()
-            }
-        );
-    }
-
-    const signatureAndRemarks = await getSignatureandRemakrs(unitId);
-    return {
-        success: true,
-        message: nextRoleDetail ? "Unit moved to next level" : "Unit approved successfully",
-        unit: {
-            ...unit.toObject(),
-            signatureAndRemarks
+const unitWorkflow = new WorkflowService({
+    workflowId: 151,
+    Model: Unit,
+    entityType: 'Unit',
+    getNotificationMessage: (entity, action) => {
+        switch(action) {
+            case 'created':
+                return `New Unit Created: ${entity.symbol}`;
+            case 'nextLevel':
+                return 'Unit moved to next level of verification';
+            case 'approved':
+                return 'Unit has been approved';
+            case 'rejected':
+                return 'Unit has been rejected';
+            default:
+                return `Unit ${action}`;
         }
-    };
-};
-
-// Helper function to process unit rejections
-const processUnitRejection = async (unitId, remarks, user) => {
-    const unit = await Unit.findOne({
-        _id: unitId,
-        status: 'Verification'
-    });
-
-    if (!unit) {
-        throw new Error('No unit found for verification');
     }
+});
 
-    unit.status = 'Rejected';
-    unit.updatedBy = user._id;
-    await unit.save();
-
-    await NotificationHub.findOneAndUpdate(
-        { relatedEntityId: unitId },
-        { status: 'Rejected' }
-    );
-
-    await addSignatureAndRemarks(
-        unitId,
-        user.roleId,
-        unit.levelId,
-        remarks,
-        user._id,
-        user.userName
-    );
-
-    return {
-        success: true,
-        message: 'Unit rejected successfully',
-        unit: {
-            ...unit.toObject(),
-            status: 'Rejected'
-        }
-    };
-};
 
 const createUnit = async (req, res) => {
     try {
@@ -193,7 +53,8 @@ const createUnit = async (req, res) => {
             $or: [
                 { name: name.toUpperCase() },
                 { symbol: symbol.toUpperCase() }
-            ]
+            ],
+            status: { $ne: 'Rejected' }
         });
 
         if (existingUnit) {
@@ -203,91 +64,52 @@ const createUnit = async (req, res) => {
             });
         }
 
-        // Create new unit first
-        const unit = new Unit({
+        // Prepare unit data
+        const unitData = {
             name: name.toUpperCase(),
             symbol: symbol.toUpperCase(),
             type,
             baseUnit: baseUnit || false,
             applicableTypes,
             serviceCategory,
-            conversions: [], // Initialize empty, will be updated after unit creation
+            conversions: [], // Start with empty conversions
             status: 'Verification',
             levelId: 1,
-            createdBy: req.user._id,
             creationType: isBulk ? 'BULK' : 'SINGLE',
             batchId: batchId || null
-        });
+        };
 
-        await unit.save();
+        // Create unit through workflow
+        const { entity: unit } = await unitWorkflow.createEntity(
+            unitData,
+            req.user,
+            remarks || 'Unit Created'
+        );
 
         // Handle conversions if provided
         if (conversions && conversions.length > 0) {
-            const conversionPromises = conversions.map(async (conversion) => {
-                try {
-                    // First try to find the target unit by symbol
-                    const toUnit = await Unit.findOne({ 
-                        symbol: conversion.toUnitSymbol.toUpperCase() 
-                    });
-
-                    if (!toUnit) {
-                        console.warn(`Target unit ${conversion.toUnitSymbol} not found`);
-                        return null;
-                    }
-
-                    return {
-                        toUnit: toUnit._id,
-                        factor: parseFloat(conversion.factor)
-                    };
-                } catch (error) {
-                    console.error(`Error processing conversion: ${error.message}`);
-                    return null;
-                }
-            });
-
-            const validConversions = (await Promise.all(conversionPromises))
-                .filter(conv => conv !== null);
-
-            if (validConversions.length > 0) {
-                unit.conversions = validConversions;
+            try {
+                // Store conversions in unit model format
+                const processedConversions = conversions.map(conversion => ({
+                    toUnit: conversion.toUnit,
+                    toUnitSymbol: conversion.toUnitSymbol.toUpperCase(),
+                    factor: conversion.factor
+                }));
+                
+                unit.conversions = processedConversions;
                 await unit.save();
-            }
 
-            // Add conversions to UnitConversionService
-            for (const conversion of conversions) {
-                try {
-                    await UnitConversionService.addConversion(
-                        unit.symbol,
-                        conversion.toUnitSymbol,
-                        conversion.factor
-                    );
-                } catch (error) {
-                    console.error(`Error adding conversion to service: ${error.message}`);
-                }
+                // Note: We don't add to UnitConversionService until unit is approved
+                // This will be handled in the approval workflow
+            } catch (error) {
+                console.error('Conversion processing error:', error);
+                throw new Error(`Failed to process conversions: ${error.message}`);
             }
         }
 
-        // Add signature and remarks
-        await addSignatureAndRemarks(
-            unit._id,
-            req.user.roleId,
-            0,
-            remarks || 'Unit Created',
-            req.user._id,
-            req.user.userName
-        );
-
-        // Create notification for first level approver
-        const permission = await Permission.findOne({ workflowId: 151 });
-        if (!permission) {
-            throw new Error('Workflow not found');
-        }
-
-        const workflowDetail = permission.workflowDetails.find(detail => detail.levelId === 1);
-        await createNotification(unit._id, workflowDetail, `New Unit Created: ${unit.symbol}`);
-
-        // Fetch the saved unit with populated conversions
-        const savedUnit = await Unit.findById(unit._id).populate('conversions.toUnit');
+        // Fetch the saved unit with all details
+        const savedUnit = await Unit.findById(unit._id)
+           
 
         res.status(201).json({
             success: true,
@@ -350,107 +172,50 @@ const getAllUnits = async (req, res) => {
 const getUnitsForVerification = async (req, res) => {
     try {
         const userRoleId = parseInt(req.query.userRoleId);
-        console.log('1. Received userRoleId:', userRoleId);
+        const { type } = req.query;
 
         if (isNaN(userRoleId)) {
-            
-            return res.status(400).json({ message: 'Invalid userRoleId provided' });
-        }
-
-        const permission = await Permission.findOne({ workflowId: 151 });
-        
-
-        if (!permission) {
-           
-            return res.status(404).json({ message: 'Workflow not found' });
-        }
-
-        const relevantWorkflowDetails = permission.workflowDetails.filter(
-            detail => detail.roleId === userRoleId
-        );
-        console.log('3. Relevant workflow details:', relevantWorkflowDetails);
-
-        if (relevantWorkflowDetails.length === 0) {
-            
-            return res.status(403).json({
-                message: 'Access denied: No matching workflow details found for this role',
-                units: []
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid userRoleId provided'
             });
         }
 
-        const notifications = await NotificationHub.find({
-            workflowId: 151,
-            roleId: userRoleId,
-            pathId: { $in: relevantWorkflowDetails.map(detail => detail.pathId) },
-            status: 'Pending'
-        });
-        
+        const result = await unitWorkflow.getEntitiesForVerification(userRoleId);
 
-        const unitIds = notifications.map(notification => notification.relatedEntityId);
-        
-
-        const units = await Unit.find({
-            _id: { $in: unitIds },
-            status: 'Verification',
-            levelId: { $in: relevantWorkflowDetails.map(detail => detail.levelId) }
-        })
-       
-        
-
-
-        // Group units by batch for bulk uploads
-        const processedUnits = units.reduce((acc, unit) => {
-            if (unit.creationType === 'BULK') {
-                const batchGroup = acc.find(group => group.batchId === unit.batchId);
-                if (batchGroup) {
-                    batchGroup.units.push(unit);
-                } else {
-                    acc.push({
-                        batchId: unit.batchId,
-                        creationType: 'BULK',
-                        createdAt: unit.createdAt,
-                        units: [unit]
-                    });
+        // Handle bulk verification requests
+        if (type === 'bulk') {
+            const bulkUnits = result.data.reduce((acc, unit) => {
+                if (unit.creationType === 'BULK') {
+                    const batchGroup = acc.find(group => group.batchId === unit.batchId);
+                    if (batchGroup) {
+                        batchGroup.units.push(unit);
+                    } else {
+                        acc.push({
+                            batchId: unit.batchId,
+                            creationType: 'BULK',
+                            createdAt: unit.createdAt,
+                            units: [unit]
+                        });
+                    }
                 }
-            } else {
-                acc.push(unit);
-            }
-            return acc;
-        }, []);
+                return acc;
+            }, []);
 
-       
-
-        const unitsWithSignatures = await Promise.all(
-            processedUnits.map(async (item) => {
-                if (item.creationType === 'BULK') {
-                    const unitsWithSigs = await Promise.all(
-                        item.units.map(async (unit) => ({
-                            ...unit.toObject(),
-                            signatureAndRemarks: await getSignatureandRemakrs(unit._id)
-                        }))
-                    );
-                    return {
-                        ...item,
-                        units: unitsWithSigs
-                    };
-                } else {
-                    return {
-                        ...item.toObject(),
-                        signatureAndRemarks: await getSignatureandRemakrs(item._id)
-                    };
-                }
-            })
-        );
-
+            return res.json({
+                success: true,
+                message: 'Bulk units retrieved successfully',
+                units: bulkUnits
+            });
+        }
 
         res.json({
             success: true,
             message: 'Units retrieved successfully',
-            units: unitsWithSignatures
+            units: result.data
         });
 
     } catch (error) {
-        console.error('Error in getUnitsForVerification:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch units for verification',
@@ -458,6 +223,7 @@ const getUnitsForVerification = async (req, res) => {
         });
     }
 };
+
 
 // Update unit status (approve/move to next level)
 const updateUnitStatus = async (req, res) => {
@@ -476,12 +242,12 @@ const updateUnitStatus = async (req, res) => {
             const units = await Unit.find({ batchId });
             const results = await Promise.all(
                 units.map(unit => 
-                    processUnitUpdate(unit._id, remarks, req.user.roleId, req.user)
+                    unitWorkflow.verifyEntity(unit._id, req.user, remarks)
                 )
             );
 
             // Reinitialize conversion cache after bulk approval
-            if (results.some(result => result.unit.status === 'Approved')) {
+            if (results.some(result => result.data.status === 'Approved')) {
                 await UnitConversionService.initializeCache();
             }
 
@@ -492,10 +258,10 @@ const updateUnitStatus = async (req, res) => {
             });
         } else {
             // Handle single unit approval
-            const result = await processUnitUpdate(id, remarks, req.user.roleId, req.user);
+            const result = await unitWorkflow.verifyEntity(id, req.user, remarks);
             
             // Reinitialize conversion cache if unit was approved
-            if (result.unit.status === 'Approved') {
+            if (result.data.status === 'Approved') {
                 await UnitConversionService.initializeCache();
             }
 
@@ -514,45 +280,46 @@ const updateUnitStatus = async (req, res) => {
 const rejectUnit = async (req, res) => {
     try {
         const { id, batchId, remarks } = req.body;
-
+        console.log('Reject request body:', req.body);
+        
         if (!remarks) {
             return res.status(400).json({
+                success: false,
                 message: "Remarks are required for rejection"
             });
         }
 
         if (batchId) {
-            // Handle bulk rejection
-            const units = await Unit.find({ 
-                batchId,
-                status: 'Verification'
-            });
-
-            const results = await Promise.all(
-                units.map(unit => 
-                    processUnitRejection(unit._id, remarks, req.user)
-                )
-            );
-
-            res.json({
-                success: true,
-                message: "Batch units rejected successfully",
-                results
-            });
+            console.log('Attempting batch rejection:', batchId);
+            // Your batch rejection code
+        } else if (id) {
+            console.log('Attempting single unit rejection:', id);
+            try {
+                const result = await unitWorkflow.rejectEntity(id, req.user, remarks);
+                console.log('Rejection result:', result);
+                return res.json({
+                    success: true,
+                    message: 'Unit rejected successfully',
+                    data: result
+                });
+            } catch (error) {
+                console.error('Rejection error:', error);
+                throw error;
+            }
         } else {
-            // Handle single unit rejection
-            const result = await processUnitRejection(id, remarks, req.user);
-            res.json(result);
+            return res.status(400).json({
+                success: false,
+                message: 'Either id or batchId is required for rejection'
+            });
         }
     } catch (error) {
+        console.error('Controller error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to reject unit',
-            error: error.message
+            error: error.message || 'Failed to reject unit'
         });
     }
 };
-
 // Bulk upload units
 const bulkUploadUnits = async (req, res) => {
     try {
@@ -776,29 +543,27 @@ const updateConversion = async (req, res) => {
 };
 
 // Get units by type
-// Backend controller
+
 const getUnitsByType = async (req, res) => {
     try {
-        const { type } = req.params;  // This will be 'MATERIAL' or 'SERVICE'
+        const { type } = req.params;  // This will be a UNIT_TYPE (e.g., 'WEIGHT', 'LENGTH', etc.)
         const { excludeUnit } = req.query;
 
-        console.log('Requested applicableType:', type);
+        console.log('Requested unit type:', type);
 
-        if (!['MATERIAL', 'SERVICE'].includes(type)) {
+        // Validate unit type
+        if (!Object.values(UNIT_TYPES).includes(type)) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid type. Must be either MATERIAL or SERVICE'
+                message: `Invalid unit type. Must be one of: ${Object.values(UNIT_TYPES).join(', ')}`
             });
         }
 
-        // Build query to find units that are either specific to this type or marked as 'BOTH'
+        // Build query to find units of the specified type
         const query = { 
+            type,             // Filter by unit type (WEIGHT, LENGTH, etc.)
             status: 'Approved',
-            active: true,
-            $or: [
-                { applicableTypes: type },
-                { applicableTypes: 'BOTH' }
-            ]
+            active: true
         };
 
         if (excludeUnit) {
@@ -881,6 +646,117 @@ const getUnitHistory = async (req, res) => {
     }
 };
 
+
+// In your backend controller
+const getUnitsByCategory = async (req, res) => {
+    try {
+        const { category } = req.params;
+        
+        const query = { 
+            status: 'Approved',
+            active: true,
+            applicableTypes: {
+                $in: [category, 'BOTH']
+            }
+        };
+
+        const units = await Unit.find(query)
+            .select('name symbol type baseUnit')
+            .sort('name');
+
+        // Return simple array of units directly
+        res.json(units);
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Failed to fetch units by category'
+        });
+    }
+};
+
+//support for Available unit 
+const getUnitTypeBySymbol = async (unitSymbol) => {
+    try {
+        const unit = await Unit.findOne({ 
+            symbol: unitSymbol.toUpperCase(),
+            status: 'Approved',
+            active: true
+        });
+        
+        if (!unit) {
+            throw new Error(`No active unit found with symbol ${unitSymbol}`);
+        }
+        
+        return unit.type; // Returns the UNIT_TYPE (e.g., 'WEIGHT', 'LENGTH', etc.)
+    } catch (error) {
+        throw new Error(`Error finding unit type: ${error.message}`);
+    }
+};
+
+//function for allowed units for one item
+const getAllowedUnitsByBaseCode = async (req, res) => {
+    try {
+        const { primaryUnit } = req.params;
+        
+        // Validate input
+        if (!primaryUnit) {
+            return res.status(400).json({
+                success: false,
+                message: 'Primary unit is required'
+            });
+        }
+
+        // Get the unit type for the primary unit
+        const unitType = await getUnitTypeBySymbol(primaryUnit);
+        
+        if (!unitType) {
+            return res.status(400).json({
+                success: false,
+                message: `Could not determine unit type for ${primaryUnit}`
+            });
+        }
+
+        // Find all active units of the same type
+        const units = await Unit.find({
+            type: unitType,
+            status: 'Approved',
+            active: true
+        }).select('name symbol type baseUnit');
+
+        // Format the response
+        const formattedUnits = units.map(unit => ({
+            _id: unit._id,
+            name: unit.name,
+            symbol: unit.symbol,
+            baseUnit: unit.baseUnit,
+            type: unit.type,
+            isPrimaryUnit: unit.symbol === primaryUnit.toUpperCase(),
+            displayName: `${unit.symbol} - ${unit.name}${unit.baseUnit ? ' (Base Unit)' : ''}`
+        }));
+
+        res.json({
+            success: true,
+            message: `Found ${units.length} allowed units for primary unit ${primaryUnit}`,
+            data: {
+                unitType,
+                units: formattedUnits
+            }
+        });
+
+    } catch (error) {
+        console.error('Error in getAllowedUnitsByBaseCode:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch allowed units',
+            error: error.message
+        });
+    }
+};
+
+
+
+
+
 module.exports = {
     createUnit,
     getAllUnits,
@@ -893,5 +769,7 @@ module.exports = {
     updateConversion,
     getUnitsByType,
     getUnitConversions,
-    getUnitHistory
+    getUnitHistory,
+    getUnitsByCategory,
+    getAllowedUnitsByBaseCode
 };

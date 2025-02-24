@@ -1,10 +1,6 @@
 const mongoose = require('mongoose');
 const Unit = require('../models/unit');
-const { 
-    UNIT_TYPES, 
-    MATERIAL_UNITS, 
-    SERVICE_UNITS 
-} = require('../constants/unitConstants');
+const { UNIT_TYPES } = require('../constants/unitConstants');
 
 class UnitConversionError extends Error {
     constructor(message) {
@@ -17,37 +13,40 @@ class UnitConversionService {
     static conversionCache = new Map();
     static baseUnits = new Map();
 
-    // Initialize both conversion cache and base units
+    // Initialize conversion cache and base units from database
     static async initializeCache() {
         try {
             // Clear existing caches
             UnitConversionService.conversionCache.clear();
             UnitConversionService.baseUnits.clear();
 
-            // Initialize base units from constants
-            [...MATERIAL_UNITS, ...SERVICE_UNITS].forEach(unit => {
-                if (unit.isBase) {
-                    UnitConversionService.baseUnits.set(unit.type, unit.symbol);
-                }
-            });
-
-            // Get active units and their conversions
+            // Get all active and approved units
             const units = await Unit.find({ 
                 active: true,
-                status: 'Approved'  // Only use approved units
+                status: 'Approved'
             }).populate('conversions.toUnit');
 
+            // Initialize base units from database
+            const baseUnits = units.filter(unit => unit.baseUnit);
+            baseUnits.forEach(unit => {
+                UnitConversionService.baseUnits.set(unit.type, unit.symbol);
+            });
+
+            // Initialize conversion cache
             units.forEach(unit => {
                 unit.conversions.forEach(conversion => {
-                    const key = `${unit.symbol}-${conversion.toUnit.symbol}`;
-                    UnitConversionService.conversionCache.set(key, conversion.factor);
-                    
-                    // Add reverse conversion
-                    const reverseKey = `${conversion.toUnit.symbol}-${unit.symbol}`;
-                    UnitConversionService.conversionCache.set(reverseKey, 1 / conversion.factor);
+                    if (conversion.toUnit) { // Check if toUnit is populated
+                        const key = `${unit.symbol}-${conversion.toUnit.symbol}`;
+                        UnitConversionService.conversionCache.set(key, conversion.factor);
+                        
+                        // Add reverse conversion
+                        const reverseKey = `${conversion.toUnit.symbol}-${unit.symbol}`;
+                        UnitConversionService.conversionCache.set(reverseKey, 1 / conversion.factor);
+                    }
                 });
             });
         } catch (error) {
+            console.error('Cache initialization error:', error);
             throw new UnitConversionError('Failed to initialize conversion cache');
         }
     }
@@ -89,7 +88,6 @@ class UnitConversionService {
                 throw new UnitConversionError('Invalid or inactive unit symbols');
             }
 
-            // Validate both unit types
             this.validateUnitType(sourceUnit.type);
             this.validateUnitType(targetUnit.type);
 
@@ -165,12 +163,17 @@ class UnitConversionService {
                 const nextUnit = conversionPath[i + 1];
                 const conversionKey = `${currentUnit}-${nextUnit}`;
                 const factor = UnitConversionService.conversionCache.get(conversionKey);
+                
+                if (factor === undefined) {
+                    throw new UnitConversionError(`Missing conversion factor for ${currentUnit} to ${nextUnit}`);
+                }
+                
                 result *= factor;
             }
 
             return Number(result.toFixed(6));
         } catch (error) {
-            if (error instanceof UnitConversionError) throw error;
+            console.error('Conversion error:', error);
             throw new UnitConversionError('Conversion failed');
         }
     }
@@ -199,6 +202,7 @@ class UnitConversionService {
                         }
                     );
 
+                    // Update reverse conversion
                     await Unit.updateOne(
                         {
                             _id: targetUnit._id,
@@ -219,6 +223,7 @@ class UnitConversionService {
                         }
                     });
 
+                    // Add reverse conversion
                     await Unit.findByIdAndUpdate(targetUnit._id, {
                         $push: {
                             conversions: {
@@ -234,55 +239,10 @@ class UnitConversionService {
                 UnitConversionService.conversionCache.set(`${toUnit}-${fromUnit}`, 1 / factor);
             });
         } catch (error) {
+            console.error('Add conversion error:', error);
             throw new UnitConversionError('Failed to add conversion factor');
         } finally {
             await session.endSession();
-        }
-    }
-
-    // Setup predefined conversions
-    static async setupPredefinedConversions() {
-        // Combine material and service units
-        const allUnits = [...MATERIAL_UNITS, ...SERVICE_UNITS];
-        
-        // Create base conversions
-        const baseConversions = [
-            // Weight
-            { from: 'KG', to: 'MT', factor: 0.001 },
-            { from: 'MT', to: 'TON', factor: 1.10231 },
-            
-            // Length
-            { from: 'MTR', to: 'KM', factor: 0.001 },
-            { from: 'MTR', to: 'CM', factor: 100 },
-            
-            // Time
-            { from: 'HR', to: 'DAY', factor: 1/24 },
-            { from: 'DAY', to: 'WK', factor: 1/7 },
-            { from: 'WK', to: 'MTH', factor: 1/4 },
-            
-            // Area
-            { from: 'SQM', to: 'SQFT', factor: 10.7639 },
-            
-            // Volume
-            { from: 'CUM', to: 'LTR', factor: 1000 }
-        ];
-
-        for (const conversion of baseConversions) {
-            try {
-                // Verify both units exist and are active
-                const fromUnit = allUnits.find(u => u.symbol === conversion.from);
-                const toUnit = allUnits.find(u => u.symbol === conversion.to);
-
-                if (fromUnit && toUnit && fromUnit.type === toUnit.type) {
-                    await this.addConversion(
-                        conversion.from,
-                        conversion.to,
-                        conversion.factor
-                    );
-                }
-            } catch (error) {
-                console.error(`Failed to add conversion: ${conversion.from} to ${conversion.to}`, error);
-            }
         }
     }
 }
