@@ -140,7 +140,7 @@ const boqSchema = new Schema({
     },
     boqStatus:{
         type: String,
-        enum:['Submitted','Accepted','Returned', 'Rejected','Revision','prepareToSubmit','submittedToClient','won', 'lost'],
+        enum:['Submitted','Accepted','Returned', 'Rejected','Revision','prepareToSubmit','submittedToClient','won', 'lost','POCreated'],
         default:'Submitted'
     },
     status: {

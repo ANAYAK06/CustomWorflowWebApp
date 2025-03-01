@@ -8,6 +8,11 @@ const clientPOSchema = new Schema({
         required: true,
         unique: true
     },
+    poDate: {
+
+        type: Date,
+        required: true
+    },
     clientId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Client',
@@ -78,8 +83,8 @@ const clientPOSchema = new Schema({
     },
     ClientPOStatus: {
         type: String,
-        enum: ['Draft', 'InProgress', 'Approved', 'Under Amendment'],
-        default: 'Draft'
+        enum: ['Submitted', 'Accepted','Closed','Rejected', 'Under Amendment','InProgress'],
+        default: 'Submitted'
     },
     remarks: String,
     createdAt: {

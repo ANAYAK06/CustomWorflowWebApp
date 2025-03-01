@@ -6,7 +6,9 @@ const {
     createClientPO,
     getPOsForVerification,
     verifyClientPO,
-    rejectClientPO
+    rejectClientPO,
+    getAllClients,
+    getSubClients
 } = require('../../ProjectModule/controllers/clientPOController');
 
 const { verifyToken } = require('../../middlewares/requireAuth');
@@ -17,6 +19,9 @@ const router = express.Router();
 router.get('/cost-centres', verifyToken, getPerformingCostCentres);
 router.get('/boq/won', verifyToken, getWonBOQs);
 router.get('/client/:clientId', verifyToken, getClientDetails);
+router.get('/clients', verifyToken, getAllClients)
+router.get('/clients/:clientId/subclients', verifyToken, getSubClients)
+
 
 // Client PO Routes
 router.post('/create', verifyToken, createClientPO);

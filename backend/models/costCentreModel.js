@@ -96,4 +96,4 @@ const costCentrerSchema = new Schema({
 
 })
 
-module.exports = mongoose.model('costcentre',costCentrerSchema)
+module.exports = mongoose.model('CostCentre',costCentrerSchema)

@@ -3,7 +3,7 @@ const ClientPO = require('../models/clientPOModel');
 const WorkflowService = require('../../controllers/workflowService');
 const BOQ = require('../../models/boqModel');
 const CostCentre = require('../../models/costCentreModel');
-const {Client, SubClient} = require('../../AccountsModule/model/clientModel');
+const { Client, SubClient } = require('../../AccountsModule/model/clientModel');
 const State = require('../../models/stateModel')
 
 
@@ -11,11 +11,11 @@ const State = require('../../models/stateModel')
 
 
 const clientPOWorkflow = new WorkflowService({
-    workflowId: 156, 
+    workflowId: 157,
     Model: ClientPO,
     entityType: 'ClientPO',
     getNotificationMessage: (entity, action) => {
-        switch(action) {
+        switch (action) {
             case 'created':
                 return `New Client PO created: ${entity.poNumber}`;
             case 'nextLevel':
@@ -30,29 +30,71 @@ const clientPOWorkflow = new WorkflowService({
     }
 });
 
+
+// For cost centers
 const getPerformingCostCentres = async (req, res) => {
     try {
         const costCentres = await CostCentre.find({ 
             ccType: '102',
-            status: 'Active'
-        }).select('ccNo ccName ccLocation');
-
-        // Fetch states to map location codes
-        const states = await State.find().select('code name');
-        const stateMap = new Map(states.map(state => [state.code, state.name]));
-
-        const enrichedCostCentres = costCentres.map(cc => ({
-            ccNo: cc.ccNo,
-            ccName: cc.ccName,
-            ccLocation: cc.ccLocation,
-            locationName: stateMap.get(cc.ccLocation) || 'Unknown'
-        }));
-
+            status: 'Approved'
+        }).select('_id ccNo ccName location');
+        
+        // Get the single document containing all states
+        const stateDocument = await State.findOne();
+        
+        // Create a normalized state map from the raw document JSON
+        const stateMap = {};
+        
+        if (stateDocument) {
+            // Convert the document to a plain JavaScript object
+            const stateDocString = JSON.stringify(stateDocument);
+            const stateDocObject = JSON.parse(stateDocString);
+            
+            console.log('Parsed state doc keys:', Object.keys(stateDocObject));
+            
+            // Now we can safely access the states array from the parsed object
+            if (stateDocObject.states && Array.isArray(stateDocObject.states)) {
+                console.log(`Found ${stateDocObject.states.length} states in the parsed document`);
+                
+                stateDocObject.states.forEach(state => {
+                    if (state && state.code && state.name) {
+                        const normalizedCode = String(state.code).trim();
+                        console.log(`Adding state mapping: code="${normalizedCode}", name="${state.name}"`);
+                        stateMap[normalizedCode] = state.name;
+                    }
+                });
+                
+                console.log(`Built state map with ${Object.keys(stateMap).length} entries`);
+            } else {
+                console.log("No states array in the parsed document");
+            }
+        } else {
+            console.log("No state document found");
+        }
+        
+        const enrichedCostCentres = costCentres.map(cc => {
+            // Normalize the location code from cost center
+            const normalizedLocation = cc.location ? String(cc.location).trim() : '';
+            
+            // Direct string lookup with fallback
+            const locationName = stateMap[normalizedLocation] || 'Unknown';
+            console.log(`Mapped location "${normalizedLocation}" to "${locationName}"`);
+            
+            return {
+                _id: cc._id,
+                ccNo: cc.ccNo,
+                ccName: cc.ccName,
+                location: cc.location,
+                locationName: locationName
+            };
+        });
+        
         res.json({
             success: true,
             data: enrichedCostCentres
         });
     } catch (error) {
+        console.error("Error in getPerformingCostCentres:", error);
         res.status(500).json({
             success: false,
             error: error.message
@@ -60,10 +102,98 @@ const getPerformingCostCentres = async (req, res) => {
     }
 };
 
+const getSubClients = async (req, res) => {
+    try {  
+        const {clientId} = req.params;
+
+        const client = await Client.findById(clientId);
+        if(!client) {
+            return res.status(404).json({
+                success: false,
+                message: 'Client not found'
+            });
+        }
+        
+        if(client.clientType === 'Individual') {
+            return res.json({
+                success: true,
+                data: []
+            });
+        }
+        
+        // Make sure to select the correct fields
+        const subClients = await SubClient.find({
+            mainClientId: clientId, 
+            status: 'Approved'
+        }).select('_id subClientCode gstNumber registeredAddress stateCode');
+        
+        // Get the state document
+        const stateDocument = await State.findOne();
+        
+        // Create a state map from the raw document JSON
+        const stateMap = {};
+        
+        if (stateDocument) {
+            // Convert the document to a plain JavaScript object
+            const stateDocString = JSON.stringify(stateDocument);
+            const stateDocObject = JSON.parse(stateDocString);
+            
+            console.log('Parsed subclient state doc keys:', Object.keys(stateDocObject));
+            
+            // Now we can safely access the states array from the parsed object
+            if (stateDocObject.states && Array.isArray(stateDocObject.states)) {
+                console.log(`Found ${stateDocObject.states.length} states in the parsed document for subclients`);
+                
+                stateDocObject.states.forEach(state => {
+                    if (state && state.code && state.name) {
+                        const normalizedCode = String(state.code).trim();
+                        stateMap[normalizedCode] = state.name;
+                    }
+                });
+                
+                console.log(`Built subclient state map with ${Object.keys(stateMap).length} entries`);
+                console.log('Subclient state map keys (sample):', Object.keys(stateMap).slice(0, 5));
+            } else {
+                console.log("No states array in the parsed document for subclients");
+            }
+        } else {
+            console.log("No state document found for subclients");
+        }
+        
+        const enrichedSubClients = subClients.map(subclient => {
+            // Normalize the state code from subclient
+            const normalizedStateCode = subclient.stateCode ? String(subclient.stateCode).trim() : '';
+            
+            // Direct string lookup with fallback
+            const stateName = stateMap[normalizedStateCode] || 'Unknown';
+            console.log(`Mapped subclient stateCode "${normalizedStateCode}" to "${stateName}"`);
+            
+            return {
+                _id: subclient._id,
+                subClientCode: subclient.subClientCode,
+                gstNumber: subclient.gstNumber,
+                stateCode: subclient.stateCode,
+                stateName: stateName
+            };
+        });
+        
+        res.json({
+            success: true,
+            data: enrichedSubClients
+        });
+    } catch (error) {   
+        console.error("Error in getSubClients:", error);
+        res.status(500).json({
+            success: false, 
+            error: error.message
+        });
+    }    
+};
+
 // Get won BOQs
 const getWonBOQs = async (req, res) => {
     try {
-        const boqs = await BOQ.find({ 
+        const boqs = await BOQ.find({
             boqStatus: 'won'
         }).select('offerNumber items');
 
@@ -79,7 +209,26 @@ const getWonBOQs = async (req, res) => {
     }
 };
 
-// Get client details based on type
+// Get client details
+
+
+const getAllClients = async (req, res) => {
+    try {
+        const clients = await Client.find({ status: 'Approved' }).select(' _id clientName clientCode clientType');
+        res.json({
+            success: true,
+            data: clients
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+}
+
+
+
 const getClientDetails = async (req, res) => {
     try {
         const { clientId } = req.params;
@@ -181,10 +330,12 @@ const createClientPO = async (req, res) => {
         const clientPOData = {
             ...poData,
             status: 'Verification',
-            ClientPOStatus: 'Draft'
+            ClientPOStatus: 'Submitted'
         };
 
         const result = await clientPOWorkflow.createEntity(clientPOData, req.user, poData.remarks);
+
+        await BOQ.findByIdAndUpdate(poData.boqId, { boqStatus: 'POCreated' });
 
         res.status(201).json({
             success: true,
@@ -214,7 +365,7 @@ const getPOsForVerification = async (req, res) => {
 
         const populatedData = await ClientPO.populate(result.data, [
             { path: 'clientId', select: 'clientName clientCode clientType' },
-            { path: 'subClientId', select: 'subClientCode' },
+            { path: 'subClientId', select: 'subClientCode stateName' },
             { path: 'costCentreId', select: 'ccNo ccName' },
             { path: 'boqId', select: 'offerNumber' }
         ]);
@@ -253,7 +404,7 @@ const verifyClientPO = async (req, res) => {
 
         // Update ClientPOStatus to Approved when PO is approved
         if (result.data.status === 'Approved') {
-            await ClientPO.findByIdAndUpdate(id, { ClientPOStatus: 'Approved' });
+            await ClientPO.findByIdAndUpdate(id, { ClientPOStatus: 'Accepted' });
         }
 
         res.json({
@@ -282,10 +433,22 @@ const rejectClientPO = async (req, res) => {
             });
         }
 
+        const clientPO = await ClientPO.findById(id);
+        if (!clientPO) {
+            return res.status(404).json({
+                success: false,
+                message: "Client PO not found"
+            });
+        }
+
         const result = await clientPOWorkflow.rejectEntity(id, req.user, remarks);
 
         // Update ClientPOStatus when PO is rejected
-        await ClientPO.findByIdAndUpdate(id, { ClientPOStatus: 'Draft' });
+        await ClientPO.findByIdAndUpdate(id, { ClientPOStatus: 'Rejected' });
+
+        if (clientPO.boqId) {
+            await BOQ.findByIdAndUpdate(clientPO.boqId, { boqStatus: 'won' });
+        }
 
         res.json({
             success: true,
@@ -307,5 +470,7 @@ module.exports = {
     createClientPO,
     getPOsForVerification,
     verifyClientPO,
-    rejectClientPO
+    rejectClientPO,
+    getAllClients,
+    getSubClients
 };
