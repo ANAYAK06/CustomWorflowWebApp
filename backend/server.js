@@ -44,6 +44,8 @@ const clientBOQRoute = require('./routes/projectModuleRoute/clientBoqRoute')
 const clientRoute = require('./routes/accountsModuleRoute/clientRoute')
 const clientPoRoute = require('./routes/projectModuleRoute/clientPORoute')
 
+const materialRequisitionRoute = require('./routes/inventoryMoudleRoute/materialRequsitionRoute')
+
 
     
 
@@ -111,6 +113,7 @@ app.use('/api/itemcodeunit', unitRoute)
 app.use('/api/clientboq', clientBOQRoute)
 app.use('/api/client', clientRoute)
 app.use('/api/clientpo', clientPoRoute)
+app.use('/api/materialrequisition', materialRequisitionRoute)
 app.use('/api/tracking', trackingRoute)
 
 
