@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { calculateWonAmounts } = require('../../utils/businessRules');
 const Schema = mongoose.Schema;
 
 // Main tender final status schema
@@ -119,9 +120,9 @@ const tenderFinalStatusSchema = new Schema({
 // Validate required fields based on tender status
 tenderFinalStatusSchema.pre('validate', function(next) {
     if (this.tenderStatus === 'lost' && (!this.lostDetails || !this.lostDetails.reasonForLoss)) {
-        next(new Error('Lost tender details are required'));
+        return next(new Error('Lost tender details are required'));
     } else if (this.tenderStatus === 'won' && (!this.wonDetails || !this.wonDetails.negotiatedAmount)) {
-        next(new Error('Won tender details are required'));
+        return next(new Error('Won tender details are required'));
     }
     next();
 });
@@ -140,10 +141,12 @@ tenderFinalStatusSchema.pre('save', async function(next) {
         }
     } else if (this.tenderStatus === 'won') {
         // Calculate variation amount and final accepted amount
-        this.wonDetails.finalVariationAmount = 
-            (this.wonDetails.negotiatedAmount * this.wonDetails.finalVariationPercentage) / 100;
-        this.wonDetails.finalAcceptedAmount = 
-            this.wonDetails.negotiatedAmount + this.wonDetails.finalVariationAmount;
+        const amounts = calculateWonAmounts(
+            this.wonDetails.negotiatedAmount,
+            this.wonDetails.finalVariationPercentage
+        );
+        this.wonDetails.finalVariationAmount = amounts.finalVariationAmount;
+        this.wonDetails.finalAcceptedAmount = amounts.finalAcceptedAmount;
     }
     next();
 });

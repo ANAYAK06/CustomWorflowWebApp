@@ -4,6 +4,7 @@ const Permission = require('../../models/permissionModel');
 const notificationEmitter = require('../../notificationEmitter');
 const NotificationHub = require('../../models/notificationHubModel');
 const { addSignatureAndRemarks, getSignatureandRemakrs } = require('../../controllers/signatureAndRemarks');
+const { validateJointVenture } = require('../../utils/businessRules');
 
 const createBusinessOpportunity = async (req, res) => {
     try {
@@ -40,33 +41,9 @@ const createBusinessOpportunity = async (req, res) => {
 
         // Joint Venture validations
         if (jointVentureAcceptable && jointVentureDetails && jointVentureDetails.length > 0) {
-            // Validate front party
-            const frontParties = jointVentureDetails.filter(jv => jv.isFrontParty);
-            if (frontParties.length !== 1) {
-                return res.status(400).json({
-                    message: "Exactly one joint venture partner must be designated as the front party"
-                });
-            }
-
-            // Validate total share percentage
-            const totalShare = jointVentureDetails.reduce((sum, jv) => sum + jv.sharePercentage, 0);
-            if (Math.abs(totalShare - 100) > 0.01) {
-                return res.status(400).json({
-                    message: "Total share percentage of all joint venture partners must equal 100%"
-                });
-            }
-
-            // Validate required fields for each joint venture partner
-            const requiredJVFields = ['companyName', 'registrationNumber', 'sharePercentage', 
-                                    'contactPerson', 'contactEmail', 'contactPhone'];
-            const missingFields = jointVentureDetails.some(jv => 
-                requiredJVFields.some(field => !jv[field])
-            );
-
-            if (missingFields) {
-                return res.status(400).json({
-                    message: "All required fields must be provided for each joint venture partner"
-                });
+            const jvError = validateJointVenture(jointVentureDetails);
+            if (jvError) {
+                return res.status(400).json({ message: jvError });
             }
         }
 
