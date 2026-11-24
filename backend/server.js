@@ -145,6 +145,7 @@ app.get('/see/notification', (req, res)=>{
     }, 30000)
 
     req.on('close',()=>{
+        clearInterval(heartbeat)
         notificationEmitter.off('notification', sendNotification)
         console.log(`SSE connection closed for userRoleId: ${userRoleId}`)
     })

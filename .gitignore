@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+
+# User uploads (keep the folder, never the files)
+backend/public/uploads/**
+!backend/public/uploads/.gitkeep
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db

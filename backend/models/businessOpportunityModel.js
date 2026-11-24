@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { nextOpportunityNumber } = require('../utils/businessRules');
 const Schema = mongoose.Schema;
 
 // Client sub-schema for better organization
@@ -230,14 +231,10 @@ businessOpportunitySchema.pre('save', async function(next) {
                 opportunityNumber: -1
             });
             
-            let nextSerial = '0001';
-            
-            if (lastOpportunity) {
-                const lastSerial = lastOpportunity.opportunityNumber.split('/')[2];
-                nextSerial = (parseInt(lastSerial) + 1).toString().padStart(4, '0');
-            }
-            
-            this.opportunityNumber = `EPPL/${currentYear}/${nextSerial}`;
+            this.opportunityNumber = nextOpportunityNumber(
+                lastOpportunity ? lastOpportunity.opportunityNumber : null,
+                currentYear
+            );
         }
         next();
     } catch (error) {
@@ -249,17 +246,17 @@ businessOpportunitySchema.pre('save', async function(next) {
 businessOpportunitySchema.pre('validate', function(next) {
     // Validate EMD details if emdRequired is true
     if (this.tenderDetails && this.tenderDetails.emdRequired && !this.tenderDetails.emdDetails) {
-        next(new Error('EMD details are required when EMD is required'));
+        return next(new Error('EMD details are required when EMD is required'));
     }
     
     // Validate tender details if type is TENDER
     if (this.type === 'TENDER' && (!this.tenderDetails || !this.tenderDetails.tenderNumber)) {
-        next(new Error('Tender details are required for TENDER type opportunities'));
+        return next(new Error('Tender details are required for TENDER type opportunities'));
     }
     
     // Validate joint venture details if joint venture is acceptable and status is submitted
     if (this.jointVentureAcceptable && this.requestStatus === 'Submitted' && !this.jointVentureDetails) {
-        next(new Error('Joint venture details are required when joint venture is acceptable and request is submitted'));
+        return next(new Error('Joint venture details are required when joint venture is acceptable and request is submitted'));
     }
     
     next();
